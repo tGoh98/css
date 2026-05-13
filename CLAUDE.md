@@ -1,6 +1,6 @@
 # Claudy Simple Server (CSS)
 
-Personal web app that aggregates and synthesizes Figma-related signal — news, SEC filings, Figma's own channels, community sources, and competitors. Scheduled AI digests, per-item breaking-news classifier, push notifications, search, chat over the corpus.
+Personal web app that aggregates and synthesizes Figma-related signal — news, SEC filings, Figma's own channels, community sources, and competitors. Scheduled AI digests, per-item breaking-news classifier, push notifications, search.
 
 "CSS" is a backronym for Claudy Simple Server (the repo lives at `playground/css`).
 
@@ -12,11 +12,12 @@ Personal web app that aggregates and synthesizes Figma-related signal — news, 
 ## Stack
 
 - Next.js + TypeScript (App Router), shadcn/ui + Tailwind
-- Neon Postgres
-- Anthropic API: Haiku 4.5 for classifier, lazy per-item summaries, and topic clustering; Sonnet 4.6 for digests and chat
-- Vercel Cron for scheduling
-- NextAuth + GitHub OAuth for auth, with a GitHub username allowlist (just the user for v1)
-- Resend for transactional email; Voyage AI for embeddings
+- Neon Postgres (pgvector enabled but unused in v1)
+- Anthropic API (Haiku 4.5) for the ingest-time classifier and topic clustering
+- Scheduled digests (Sonnet 4.6) run **locally** via `claude --print` on the owner's Mac (Max plan capacity), writing `summary_md` back to Neon
+- Vercel Cron for ingest/clustering/notify jobs; `launchd` on the owner's Mac for the digest jobs
+- NextAuth + GitHub OAuth for auth, allowlist via `AUTH_ALLOWLIST` env (just `tGoh98` for v1)
+- Resend for transactional email (notifications)
 
 ## Conventions
 

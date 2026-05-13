@@ -8,12 +8,13 @@ Personal web app for aggregating, classifying, and summarizing Figma-related sig
 - Single place to track everything published about Figma the company
 - Scheduled AI digests (daily / weekly / monthly) and a per-item breaking-news flag
 - Multi-tab UI separating different kinds of signal (general feed, official, watchlist, competitors)
-- Low-friction personal use: push notifications, search, bookmarks, chat over the corpus
+- Low-friction personal use: push notifications, search, bookmarks
 
 **Non-goals (for v1)**
 - Public-facing product or SEO
 - Full text of paywalled sources (WSJ, Barron's, proprietary analyst reports) — we accept headlines + snippets
 - Real-time multi-user collaboration (single user / small group, light auth)
+- Interactive AI: no chat over the corpus and no on-demand per-item summaries. AI runs at ingest (cheap, batched) and on a schedule (digests). Everything else is plain queries.
 
 ## UI
 
@@ -24,55 +25,62 @@ Personal web app for aggregating, classifying, and summarizing Figma-related sig
 3. **Official** — SEC filings + Figma's own blog/press releases. FIG ticker chart pinned at top with news/filings overlaid as event markers. Dedicated **Insider Activity** widget summarizing recent Form 4 transactions (who, how many shares, at what price, cumulative-by-person).
 4. **Watchlist** — saved filters for specific people (Dylan Field, exec team) and topics ("AI features", "acquisitions"). Each watchlist gets its own filtered feed view.
 5. **Competitors** — Adobe, Canva, Sketch, Penpot. Same shape as Feed but scoped.
-6. **Chat** — Q&A interface over the corpus. RAG-style retrieval + Sonnet for answers.
-7. **Analyst** — consensus ratings + price-target chart over time, rating-change events, Seeking Alpha free-tier articles. Note: full proprietary reports (Morningstar, Goldman, JPM) are paywalled behind Bloomberg/Refinitiv and not realistically scrapable.
+6. **Analyst** — consensus ratings + price-target chart over time, rating-change events, Seeking Alpha free-tier articles. Note: full proprietary reports (Morningstar, Goldman, JPM) are paywalled behind Bloomberg/Refinitiv and not realistically scrapable.
 
 ### Cross-cutting
 
-- **Search** — `Cmd-K` palette plus a search bar on Feed. Postgres full-text search over title + snippet + full_text + AI summary.
+- **Search** — `Cmd-K` palette plus a search bar on Feed. Postgres full-text search over title + snippet + full_text + classifier `one_line`.
 - **Bookmarks & notes** — every item has a bookmark toggle and a freeform notes field. "Saved" view collects bookmarked items across tabs.
-- **Topic clustering / dedup** — items grouped by semantic similarity; the Feed collapses N near-duplicates into a single card with a count + "see all".
-- **Push notifications** — per-channel config (email + Slack/Discord webhook) for breaking items. Default off, opt-in per channel.
+- **Topic clustering / dedup** — items grouped by Haiku into clusters; the Feed collapses N near-duplicates into a single card with a count + "see all".
+- **Push notifications** — email via Resend for breaking items. Default off, opt-in.
 
 ### Per-item behavior
 
-- Title, source badge, published date, classifier `one_line`, priority badge (breaking/notable/routine), bookmark toggle
-- Click → detail view with lazy AI summary (Haiku, cached), notes field, link out
+- Title, source badge, published date, classifier `one_line` (one-sentence AI blurb generated at ingest), priority badge (breaking/notable/routine), bookmark toggle
+- Click → detail view with the full snippet/text (no on-demand AI call), notes field, link out
 
 ## Architecture
 
 ```
                 ┌──────────────────────────────────┐
-Scheduler ────► │ Ingest workers (one per source)  │
-(cron/launchd)  │ news / SEC / Figma blog / reddit │
+Vercel Cron ──► │ Ingest workers (one per source)  │
+                │ news / SEC / Figma blog / reddit │
                 │ / HN / competitors               │
                 └──────────────┬───────────────────┘
                                │ for each new item:
                                │   1. dedup by external_id
-                               │   2. Haiku classifier (relevance + priority + one_line)
+                               │   2. Haiku classifier (relevance + priority + one_line) — API
                                │   3. drop if relevance < 0.4
                                │   4. assign to topic cluster
                                │   5. insert
                                │   6. if priority='breaking' → enqueue notification
                                ▼
                 ┌──────────────────────────────────┐
-                │ Postgres                         │
+                │ Neon Postgres                    │
                 │ items, sources, classifications, │
-                │ summaries, digests, clusters,    │
-                │ watchlists, bookmarks, notes,    │
+                │ digests, clusters, watchlists,   │
+                │ bookmarks, notes,                │
                 │ notification_channels, sent      │
-                └─────┬────────────────────┬───────┘
-                      │                    │
-                      │                    ▼
-                      │      ┌──────────────────────────┐
-                      │      │ Notifier worker          │
-                      │      │ email / Slack / Discord  │
-                      │      └──────────────────────────┘
+                └─────┬───────────────┬────────────┘
+                      │               │
+                      │               ▼
+                      │  ┌──────────────────────────┐
+                      │  │ Notifier (Vercel Function)│
+                      │  │ email via Resend          │
+                      │  └──────────────────────────┘
+                      │
+                      │  ┌──────────────────────────────────┐
+                      │  │ Local digest worker (user's Mac) │
+                      │  │ launchd → `claude --print`        │
+                      │  │ Sonnet 4.6 via Max plan           │
+                      │  │ batches: daily/weekly/monthly     │
+                      │  │ writes summary_md back to Neon    │
+                      │  └──────────────────────────────────┘
                       ▼
                 ┌──────────────────────────────────┐
-                │ Next.js app                      │
+                │ Next.js app on Vercel            │
                 │ Feed / Digests / Official /      │
-                │ Watchlist / Competitors / Chat   │
+                │ Watchlist / Competitors / Analyst│
                 │ (+ Search, Bookmarks, Notes)     │
                 └──────────────────────────────────┘
 ```
@@ -95,16 +103,13 @@ item_classifications
   item_id pk, relevance numeric, priority ('routine'|'notable'|'breaking'),
   one_line text, classifier_model, classified_at
 
-item_summaries
-  item_id pk, summary_md, model, generated_at
-  (rows exist only for items a user has clicked into)
-
 item_clusters
   id, representative_title, item_count, first_seen_at, last_seen_at
 
 digests
   id, period ('day'|'week'|'month'), period_start, period_end,
   summary_md, item_ids int[], model, generated_at
+  unique(period, period_start)  -- catch-up logic uses this
 
 watchlists
   id, name, kind ('person'|'topic'|'keyword'), match_config_json, created_at
@@ -120,10 +125,6 @@ notification_channels
 
 notifications_sent
   item_id, channel_id, sent_at  -- dedup so we don't notify twice
-
-item_embeddings
-  item_id pk, embedding vector(512), model, generated_at
-  -- HNSW index on embedding for cosine similarity
 
 users
   id, email, github_id, github_username, created_at
@@ -162,46 +163,45 @@ Indexes: `items(published_at desc)`, `items(source_id, published_at desc)`, `ite
 
 ## AI usage
 
-- **Ingest-time classifier (Haiku 4.5).** One call per new item. JSON output: `{ relevance: 0–1, priority: routine|notable|breaking, one_line: string }`. Drop if `relevance < 0.4`. ~$0.0005/item.
-- **Lazy per-item summary (Haiku 4.5).** Generated on first click, cached. ~$0.001/item viewed.
-- **Topic clustering (Haiku 4.5).** Periodic job (every 30 min) re-clusters last-24h items by semantic similarity; picks a representative title. Small cost.
-- **Scheduled digests (Sonnet 4.6).** Prioritized Markdown digest with Breaking / Notable / Routine sections. ~$0.05–0.20 per run.
-- **Embeddings (Voyage `voyage-3-lite`, 512-dim).** Every ingested item (post-classifier, post-drop) is embedded for semantic retrieval. ~$0.0001/item; free tier (200M tokens/mo) easily covers us.
-- **Chat over corpus (Sonnet 4.6).** RAG: pgvector cosine + Postgres FTS hybrid retrieves top-N items → Sonnet answers grounded in their content with inline citations. ~$0.02–0.10 per question.
+- **Ingest-time classifier (Anthropic API, Haiku 4.5).** One call per new item. JSON output: `{ relevance: 0–1, priority: routine|notable|breaking, one_line: string }`. Drop if `relevance < 0.4`. ~$0.0005/item.
+- **Topic clustering (Anthropic API, Haiku 4.5).** Periodic job (every 30 min) re-clusters last-24h items by semantic similarity; picks a representative title. Small cost.
+- **Scheduled digests (local Claude Code CLI, Sonnet 4.6, Max plan).** A `launchd` job on the user's Mac runs `scripts/run-digest.ts` daily / weekly / monthly. The script connects to Neon, pulls items for the period, invokes `claude --print` with a structured digest prompt, parses the response, and writes `summary_md` back to the `digests` table. Catch-up: each run checks the recent window for missing digests and generates them — so a daily digest missed because the Mac was asleep at 09:00 gets generated whenever the Mac next runs the job. Cost: $0 marginal (uses Max plan capacity, well within rate limits).
 
-**Estimated monthly cost:** $8–20 depending on chat usage and competitor volume; embeddings stay within Voyage free tier.
+**Estimated monthly cost:** $3–5 API (classifier + clustering) + $0 for digests (Max plan) + $0 for notifications (Resend free tier).
 
 ## Scheduling
 
-| Job | Cadence | What |
-|---|---|---|
-| `ingest:news` | every 15 min | Google News RSS for Figma |
-| `ingest:reddit` | every 15 min | Reddit search across configured subs |
-| `ingest:hn` | every 15 min | HN Algolia search |
-| `ingest:figma-blog` | hourly | Figma blog RSS |
-| `ingest:sec` | hourly | EDGAR for new Figma filings |
-| `ingest:competitors` | hourly | Adobe / Canva / Sketch / Penpot |
-| `cluster:recent` | every 30 min | Re-cluster last-24h items |
-| `notify:breaking` | event-driven | On insert of priority=breaking, fan out to enabled channels |
-| `digest:daily` | 09:00 daily | Daily digest for yesterday |
-| `digest:weekly` | Mondays 09:00 | Weekly digest for prior week |
-| `digest:monthly` | 1st of month 09:00 | Monthly digest for prior month |
+| Job | Cadence | Where | What |
+|---|---|---|---|
+| `ingest:news` | every 15 min | Vercel Cron | Google News RSS for Figma |
+| `ingest:reddit` | every 15 min | Vercel Cron | Reddit search across configured subs |
+| `ingest:hn` | every 15 min | Vercel Cron | HN Algolia search |
+| `ingest:figma-blog` | hourly | Vercel Cron | Figma blog RSS |
+| `ingest:sec` | hourly | Vercel Cron | EDGAR for new Figma filings |
+| `ingest:competitors` | hourly | Vercel Cron | Adobe / Canva / Sketch / Penpot |
+| `cluster:recent` | every 30 min | Vercel Cron | Re-cluster last-24h items |
+| `notify:breaking` | event-driven | Vercel Function | On insert of priority=breaking, fan out to enabled channels |
+| `digest:daily` | 09:00 daily | **launchd (user's Mac)** | Daily digest via local Claude Code |
+| `digest:weekly` | Mondays 09:00 | **launchd (user's Mac)** | Weekly digest |
+| `digest:monthly` | 1st of month 09:00 | **launchd (user's Mac)** | Monthly digest |
 
-Scheduled via Vercel Cron.
+Local digest jobs use `StartCalendarInterval` + the script's catch-up logic so missed runs (Mac asleep, traveling, etc.) are picked up on next wake.
 
 ## Deployment
 
-- **Hosting:** Vercel (Next.js app + serverless functions + Vercel Cron for scheduled jobs)
-- **Database:** Neon Postgres (free tier)
-- **Auth:** NextAuth + GitHub OAuth, with an allowlist of GitHub usernames (the user + a few friends)
-- **Secrets:** managed via Vercel env vars:
-  - `DATABASE_URL` (Neon, with pgvector extension enabled)
-  - `ANTHROPIC_API_KEY` (Claude)
-  - `VOYAGE_API_KEY` (embeddings)
-  - `RESEND_API_KEY`, `RESEND_FROM_EMAIL`, `RESEND_TO_EMAIL` (notifications)
-  - `NEXTAUTH_SECRET`, `NEXTAUTH_URL`, `GITHUB_CLIENT_ID`, `GITHUB_CLIENT_SECRET` (auth)
-  - `AUTH_ALLOWLIST` (comma-separated GitHub usernames)
-- **Cost:** $0 infra (free tiers easily cover this), ~$8–20/mo Anthropic; embeddings + email within free tiers
+- **Web app:** Vercel (Next.js + serverless functions + Vercel Cron for ingest)
+- **Database:** Neon Postgres (free tier). The `pgvector` extension is enabled but unused in v1 (kept available for a future "chat over corpus" feature if we add one).
+- **Auth:** NextAuth + GitHub OAuth, allowlist via `AUTH_ALLOWLIST` env var (defaults to just the owner)
+- **Digest worker:** runs on the owner's Mac. `scripts/run-digest.ts` is invoked by `~/Library/LaunchAgents/com.css.digest-daily.plist` (and `-weekly`, `-monthly`). Requires Claude Code CLI installed and authenticated on the Max plan.
+- **Secrets (Vercel env vars):**
+  - `DATABASE_URL` (Neon)
+  - `ANTHROPIC_API_KEY` (classifier + clustering)
+  - `RESEND_API_KEY`, `RESEND_FROM_EMAIL`, `RESEND_TO_EMAIL`
+  - `NEXTAUTH_SECRET`, `NEXTAUTH_URL`, `GITHUB_CLIENT_ID`, `GITHUB_CLIENT_SECRET`
+  - `AUTH_ALLOWLIST` (comma-separated GitHub usernames, e.g. `tGoh98`)
+- **Secrets (local, for digest worker):**
+  - `DATABASE_URL` in `~/.config/css/digest.env` (outside the repo, mode 600)
+- **Cost:** $0 infra (Vercel + Neon + Resend free tiers), ~$3–5/mo Anthropic API, $0 digests (Max plan)
 
 ## Backfill strategy
 
@@ -221,24 +221,25 @@ One-shot script per source: `npm run backfill:<source>`. Marks items with `backf
 | 2026-05-13 | Project name: Claudy Simple Server (CSS) | User-chosen; backronym for the existing `playground/css` directory |
 | 2026-05-13 | Stack: Next.js + TS + Postgres | Best DX for "small site + scheduled jobs + auth"; one repo, one language |
 | 2026-05-13 | Hosting: Vercel + Neon, NextAuth + GitHub OAuth | Same cost as local; always-on cron, friends can see it, no machine-uptime worry |
-| 2026-05-13 | Per-item summaries are lazy on click, not at ingest | Cuts AI cost; most items never get read |
 | 2026-05-13 | Single Haiku call does relevance + priority + one-line together | One round-trip handles "is this actually Figma" and "is this breaking" |
 | 2026-05-13 | News aggregator = Google News RSS for v1 | Free and broad. NewsAPI free tier too restricted; paid tier overkill. |
 | 2026-05-13 | Core sources for v1: Google News, SEC EDGAR, Figma blog, Reddit, HN | User confirmed |
-| 2026-05-13 | Tabs: Feed, Digests, Official, Watchlist, Competitors, Chat, Analyst | All 8 optional features in scope; Analyst tab confirmed (realistic version) |
+| 2026-05-13 | Tabs: Feed, Digests, Official, Watchlist, Competitors, Analyst | 6 tabs (Chat dropped) |
 | 2026-05-13 | Drop items with classifier relevance < 0.4 | Handles "Figma" false positives (math, foreign-language matches) |
 | 2026-05-13 | Insider Activity surfaced as widget inside Official tab | Form 4 already in ingest; no need for a separate tab |
 | 2026-05-13 | Analyst tab = ratings + price-target chart + rating-change events + Seeking Alpha RSS | Full proprietary reports require Bloomberg/Refinitiv; not realistically scrapable |
-| 2026-05-13 | Retention: keep everything forever | DB is small, archival is valuable for digests and chat |
-| 2026-05-13 | Embeddings: Voyage `voyage-3-lite` (512-dim) via pgvector | Recommended by Anthropic; free tier covers our volume; 512-dim keeps the index small |
+| 2026-05-13 | Retention: keep everything forever | DB is small, archival is valuable for digests |
 | 2026-05-13 | Notifications: Resend (email only for v1) | 3k emails/mo free; lightweight setup; Slack/Discord can be added later |
 | 2026-05-13 | Auth: NextAuth + GitHub OAuth, allowlist via env var | Per-user identity preserved for bookmarks/notes; allowlist defaults to just the owner |
 | 2026-05-13 | Pre-seed defaults (people, topics, competitors, subs) | User opted in; lets v1 be useful from minute one |
+| 2026-05-13 | Drop Chat tab and on-demand per-item summaries | Chat + lazy summaries inherently want real-time API calls; not worth the spend for a personal tool. Search via Postgres FTS is sufficient. |
+| 2026-05-13 | Digests run via local Claude Code (Max plan), not API | Uses existing Max subscription instead of API spend; digests are batched/async and tolerate the laptop-on dependency (catch-up logic handles missed runs). Classifier + clustering stay on API for low latency. |
+| 2026-05-13 | Drop Voyage embeddings and `item_embeddings` table | No chat = no RAG = no embeddings needed. `pgvector` extension stays enabled on Neon for future use but is unused in v1. |
 
 ## Open questions
 
 None blocking v1 scope. To resolve during scaffolding:
 
 - Exact Figma blog RSS URL (verify `figma.com/blog/feed/` or equivalent)
-- Figma's SEC CIK (look up at first ingest run)
-- Owner's GitHub username for the auth allowlist
+- Figma's SEC CIK (look up at first ingest run; not assigned until S-1 filed)
+- Owner's GitHub username for the auth allowlist: `tGoh98` (recorded)

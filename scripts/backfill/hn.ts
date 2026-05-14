@@ -45,7 +45,7 @@ async function main(): Promise<void> {
   const floorTs = Math.floor(floor.getTime() / 1000);
 
   const sourceId = await ensureSource({
-    name: "Hacker News",
+    name: "Hacker News (Figma)",
     kind: "hn",
     category: "core",
   });
@@ -80,7 +80,7 @@ async function main(): Promise<void> {
           title,
           snippet: hit.story_text ?? null,
           url,
-          sourceName: "Hacker News",
+          sourceName: "Hacker News (Figma)",
           sourceKind: "hn",
         });
         kept++;

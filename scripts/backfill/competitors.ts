@@ -30,7 +30,7 @@ type FeedDef = {
 
 const FEEDS: FeedDef[] = [
   {
-    name: "Adobe (Google News)",
+    name: "Google News (Adobe)",
     kind: "competitor-news",
     url: "https://news.google.com/rss/search?q=Adobe+Figma+OR+%22Adobe+XD%22&hl=en-US&gl=US&ceid=US:en",
   },
@@ -40,7 +40,7 @@ const FEEDS: FeedDef[] = [
     url: "https://news.adobe.com/rss/index.xml",
   },
   {
-    name: "Canva (Google News)",
+    name: "Google News (Canva)",
     kind: "competitor-news",
     url: "https://news.google.com/rss/search?q=Canva&hl=en-US&gl=US&ceid=US:en",
   },

@@ -95,41 +95,60 @@ export async function ingest(): Promise<IngestResult> {
     return result;
   }
 
+  // Cap + parallel so a fresh source row (or a backfill divergence) doesn't
+  // blow Vercel's 60s function cap. Already-inserted items dedup cheaply at
+  // the unique constraint and skip the classifier.
+  const MAX_FILINGS_PER_TICK = 25;
+  const CONCURRENCY = 6;
+
+  const candidates: Array<{
+    accession: string; form: string; url: string; indexUrl: string;
+    filingDate: string; description: string; primary: string;
+  }> = [];
   const n = recent.accessionNumber.length;
-  for (let i = 0; i < n; i++) {
+  for (let i = 0; i < n && candidates.length < MAX_FILINGS_PER_TICK; i++) {
     const form = recent.form[i];
     if (!KEPT_FORMS.has(form)) continue;
-
     const accession = recent.accessionNumber[i];
     const accNoDash = accession.replace(/-/g, "");
     const primary = recent.primaryDocument[i] || `${accession}-index.htm`;
-    const url = `https://www.sec.gov/Archives/edgar/data/${Number(cik)}/${accNoDash}/${primary}`;
-    const indexUrl = `https://www.sec.gov/Archives/edgar/data/${Number(cik)}/${accNoDash}/${accession}-index.htm`;
-    const filingDate = recent.filingDate[i];
-    const description = recent.primaryDocDescription[i] ?? form;
-    const title = `${form} — ${description || submissions.name}`;
+    candidates.push({
+      accession,
+      form,
+      url: `https://www.sec.gov/Archives/edgar/data/${Number(cik)}/${accNoDash}/${primary}`,
+      indexUrl: `https://www.sec.gov/Archives/edgar/data/${Number(cik)}/${accNoDash}/${accession}-index.htm`,
+      filingDate: recent.filingDate[i],
+      description: recent.primaryDocDescription[i] ?? form,
+      primary,
+    });
+  }
 
-    await insertAndClassify(
-      sourceId,
-      "SEC EDGAR (Figma)",
-      "sec",
-      {
-        externalId: accession,
-        url,
-        title,
-        snippet: `Form ${form} filed ${filingDate} by ${submissions.name}.`,
-        publishedAt: new Date(`${filingDate}T00:00:00Z`),
-        rawJson: {
-          filing_type: form,
-          accession,
-          filing_date: filingDate,
-          report_date: recent.reportDate[i] ?? null,
-          primary_document: primary,
-          index_url: indexUrl,
-          cik,
-        },
-      },
-      result,
+  for (let i = 0; i < candidates.length; i += CONCURRENCY) {
+    const batch = candidates.slice(i, i + CONCURRENCY);
+    await Promise.allSettled(
+      batch.map(async (c) => {
+        await insertAndClassify(
+          sourceId,
+          "SEC EDGAR (Figma)",
+          "sec",
+          {
+            externalId: c.accession,
+            url: c.url,
+            title: `${c.form} — ${c.description || submissions.name}`,
+            snippet: `Form ${c.form} filed ${c.filingDate} by ${submissions.name}.`,
+            publishedAt: new Date(`${c.filingDate}T00:00:00Z`),
+            rawJson: {
+              filing_type: c.form,
+              accession: c.accession,
+              filing_date: c.filingDate,
+              primary_document: c.primary,
+              index_url: c.indexUrl,
+              cik,
+            },
+          },
+          result,
+        );
+      }),
     );
   }
 

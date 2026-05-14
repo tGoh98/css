@@ -107,21 +107,31 @@ export async function ingest(): Promise<IngestResult> {
     );
   }
 
-  for (const c of candidates) {
-    await insertAndClassify(
-      sourceId,
-      "Figma Blog",
-      "blog",
-      {
-        externalId: urlAsExternalId(c.url),
-        url: c.url,
-        title: c.title,
-        snippet: c.snippet,
-        // Fall back to now() if no date found — the AI classifier still works
-        // and the user-visible "Recent" sort just treats it as "today".
-        publishedAt: c.publishedAt ?? new Date(),
-      },
-      result,
+  // Cap + parallel — the index page can yield 50+ post anchors and a fresh
+  // source would otherwise blow the 60s function cap on first ingest.
+  const MAX_POSTS_PER_TICK = 25;
+  const CONCURRENCY = 6;
+  const slice = candidates.slice(0, MAX_POSTS_PER_TICK);
+  for (let i = 0; i < slice.length; i += CONCURRENCY) {
+    const batch = slice.slice(i, i + CONCURRENCY);
+    await Promise.allSettled(
+      batch.map(async (c) => {
+        await insertAndClassify(
+          sourceId,
+          "Figma Blog",
+          "blog",
+          {
+            externalId: urlAsExternalId(c.url),
+            url: c.url,
+            title: c.title,
+            snippet: c.snippet,
+            // Fall back to now() if no date found — the AI classifier still works
+            // and the user-visible "Recent" sort just treats it as "today".
+            publishedAt: c.publishedAt ?? new Date(),
+          },
+          result,
+        );
+      }),
     );
   }
 

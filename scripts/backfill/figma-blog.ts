@@ -93,7 +93,7 @@ async function main(): Promise<void> {
   const limit = flags.limit ?? Number.POSITIVE_INFINITY;
 
   const sourceId = await ensureSource({
-    name: "Figma blog",
+    name: "Figma Blog",
     kind: "blog",
     category: "core",
     configJson: { url: `${ORIGIN}/blog/` },
@@ -140,7 +140,7 @@ async function main(): Promise<void> {
           title: post.title,
           snippet: post.snippet,
           url: post.url,
-          sourceName: "Figma blog",
+          sourceName: "Figma Blog",
           sourceKind: "blog",
         });
         kept++;

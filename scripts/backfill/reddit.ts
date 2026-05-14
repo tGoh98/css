@@ -83,7 +83,7 @@ async function main(): Promise<void> {
   const limit = flags.limit ?? Number.POSITIVE_INFINITY;
 
   const sourceId = await ensureSource({
-    name: "Reddit (Figma search)",
+    name: "Reddit search (Figma)",
     kind: "reddit",
     category: "core",
     configJson: { subs: SUBS, query: QUERY },

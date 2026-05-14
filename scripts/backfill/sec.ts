@@ -103,7 +103,7 @@ async function main(): Promise<void> {
   console.log(`[backfill:sec] using CIK ${cik}`);
 
   const sourceId = await ensureSource({
-    name: "SEC EDGAR",
+    name: "SEC EDGAR (Figma)",
     kind: "sec",
     category: "core",
     configJson: { cik },
@@ -152,7 +152,7 @@ async function main(): Promise<void> {
           title,
           snippet,
           url,
-          sourceName: "SEC EDGAR",
+          sourceName: "SEC EDGAR (Figma)",
           sourceKind: "sec",
         });
         kept++;

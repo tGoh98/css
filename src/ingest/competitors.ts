@@ -207,22 +207,32 @@ async function pollPenpotReleases(result: IngestResult): Promise<void> {
 export async function ingest(): Promise<IngestResult> {
   const result = emptyResult();
 
-  // Established players.
-  await pollGoogleNews("Adobe", "Adobe design tool", result);
-  await pollGoogleNews("Canva", "Canva design", result);
-  await pollRssBlog("Sketch", SKETCH_BLOG_RSS, result);
-  await pollRssBlog("Penpot", PENPOT_BLOG_RSS, result);
-  await pollPenpotReleases(result);
+  // Brand-level parallelization on top of the per-brand cap+parallel.
+  // 10 brands × ~5s serial = 50s; running 3 in flight at a time keeps the
+  // whole route ~20s — well under Vercel's 60s function cap.
+  const BRAND_CONCURRENCY = 3;
+  const brandTasks: Array<() => Promise<void>> = [
+    // Established players.
+    () => pollGoogleNews("Adobe", "Adobe design tool", result),
+    () => pollGoogleNews("Canva", "Canva design", result),
+    () => pollRssBlog("Sketch", SKETCH_BLOG_RSS, result),
+    () => pollRssBlog("Penpot", PENPOT_BLOG_RSS, result),
+    () => pollPenpotReleases(result),
+    // AI-native challengers — newer entrants pressing on Figma's AI strategy.
+    // Queries are quoted to reduce noise; classifier relevance filter handles
+    // whatever still slips through.
+    () => pollGoogleNews("Google Stitch", '"Google Stitch" design', result),
+    () => pollGoogleNews("Claude design", '"Claude" Anthropic design tool', result),
+    () => pollGoogleNews("Pencil", '"Pencil" AI design', result),
+    () => pollGoogleNews("Dessn", '"Dessn" design', result),
+    () => pollGoogleNews("Galileo AI", '"Galileo AI" design', result),
+    () => pollGoogleNews("Uizard", "Uizard", result),
+  ];
 
-  // AI-native challengers — newer entrants pressing on Figma's AI strategy.
-  // Queries are quoted to reduce noise; classifier relevance filter handles
-  // whatever still slips through (most matches will be dropped at <0.4).
-  await pollGoogleNews("Google Stitch", '"Google Stitch" design', result);
-  await pollGoogleNews("Claude design", '"Claude" Anthropic design tool', result);
-  await pollGoogleNews("Pencil", '"Pencil" AI design', result);
-  await pollGoogleNews("Dessn", '"Dessn" design', result);
-  await pollGoogleNews("Galileo AI", '"Galileo AI" design', result);
-  await pollGoogleNews("Uizard", "Uizard", result);
+  for (let i = 0; i < brandTasks.length; i += BRAND_CONCURRENCY) {
+    const batch = brandTasks.slice(i, i + BRAND_CONCURRENCY);
+    await Promise.allSettled(batch.map((t) => t()));
+  }
 
   return result;
 }

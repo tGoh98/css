@@ -44,48 +44,50 @@ export function EarningsSurprise({ rows }: { rows: FinnhubEarningsRow[] }) {
         </CardDescription>
       </CardHeader>
       <CardContent className="px-0">
-        <Table>
-          <TableHeader>
-            <TableRow>
-              <TableHead>Quarter</TableHead>
-              <TableHead className="text-right">Est. EPS</TableHead>
-              <TableHead className="text-right">Actual EPS</TableHead>
-              <TableHead className="text-right">Surprise</TableHead>
-              <TableHead className="text-right">Surprise %</TableHead>
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            {rows.map((r) => {
-              const sign = (r.surprise ?? 0) > 0 ? "beat" : (r.surprise ?? 0) < 0 ? "miss" : "inline";
-              return (
-                <TableRow key={`${r.year}-${r.quarter}`}>
-                  <TableCell>
-                    <span className="font-medium">Q{r.quarter} {r.year}</span>
-                    <span className="ml-2 text-xs text-muted-foreground">
-                      ({new Date(r.period).toLocaleDateString(undefined, { month: "short", day: "numeric" })})
-                    </span>
-                  </TableCell>
-                  <TableCell className="text-right tabular-nums">{fmtEps(r.estimate)}</TableCell>
-                  <TableCell className="text-right tabular-nums font-medium">{fmtEps(r.actual)}</TableCell>
-                  <TableCell className="text-right tabular-nums">
-                    {fmtEps(r.surprise)}
-                  </TableCell>
-                  <TableCell className="text-right">
-                    {sign === "beat" ? (
-                      <Badge className="bg-emerald-500/15 text-emerald-700 dark:bg-emerald-500/20 dark:text-emerald-400">
-                        {fmtPct(r.surprisePercent)}
-                      </Badge>
-                    ) : sign === "miss" ? (
-                      <Badge variant="destructive">{fmtPct(r.surprisePercent)}</Badge>
-                    ) : (
-                      <Badge variant="secondary">{fmtPct(r.surprisePercent)}</Badge>
-                    )}
-                  </TableCell>
-                </TableRow>
-              );
-            })}
-          </TableBody>
-        </Table>
+        <div className="overflow-x-auto">
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>Qtr</TableHead>
+                <TableHead className="text-right">Est.</TableHead>
+                <TableHead className="text-right">Actual</TableHead>
+                <TableHead className="hidden sm:table-cell text-right">Surprise</TableHead>
+                <TableHead className="text-right">%</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {rows.map((r) => {
+                const sign = (r.surprise ?? 0) > 0 ? "beat" : (r.surprise ?? 0) < 0 ? "miss" : "inline";
+                return (
+                  <TableRow key={`${r.year}-${r.quarter}`}>
+                    <TableCell>
+                      <span className="font-medium">Q{r.quarter} {String(r.year).slice(-2)}</span>
+                      <span className="ml-2 hidden text-xs text-muted-foreground sm:inline">
+                        ({new Date(r.period).toLocaleDateString(undefined, { month: "short", day: "numeric" })})
+                      </span>
+                    </TableCell>
+                    <TableCell className="text-right tabular-nums">{fmtEps(r.estimate)}</TableCell>
+                    <TableCell className="text-right tabular-nums font-medium">{fmtEps(r.actual)}</TableCell>
+                    <TableCell className="hidden sm:table-cell text-right tabular-nums">
+                      {fmtEps(r.surprise)}
+                    </TableCell>
+                    <TableCell className="text-right">
+                      {sign === "beat" ? (
+                        <Badge className="bg-emerald-500/15 text-emerald-700 dark:bg-emerald-500/20 dark:text-emerald-400">
+                          {fmtPct(r.surprisePercent)}
+                        </Badge>
+                      ) : sign === "miss" ? (
+                        <Badge variant="destructive">{fmtPct(r.surprisePercent)}</Badge>
+                      ) : (
+                        <Badge variant="secondary">{fmtPct(r.surprisePercent)}</Badge>
+                      )}
+                    </TableCell>
+                  </TableRow>
+                );
+              })}
+            </TableBody>
+          </Table>
+        </div>
       </CardContent>
     </Card>
   );

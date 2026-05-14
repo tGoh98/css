@@ -163,7 +163,7 @@ Indexes: `items(published_at desc)`, `items(source_id, published_at desc)`, `ite
 
 ## AI usage
 
-- **Ingest-time classifier (Anthropic API, Haiku 4.5).** One call per new item. JSON output: `{ relevance: 0–1, priority: routine|notable|breaking, one_line: string }`. Drop if `relevance < 0.4`. ~$0.0005/item.
+- **Ingest-time classifier (Anthropic API, Haiku 4.5).** One call per new item. JSON output: `{ relevance: 0–1, priority: routine|notable|breaking, one_line: string }`. Drop if `relevance < 0.5`. Priority rubric biases toward 'routine' (default) — only true material events escalate to 'breaking'. ~$0.0005/item.
 - **Topic clustering (Anthropic API, Haiku 4.5).** Periodic job (every 30 min) re-clusters last-24h items by semantic similarity; picks a representative title. Small cost.
 - **Scheduled digests (local Claude Code CLI, Sonnet 4.6, Max plan).** A `launchd` job on the user's Mac runs `scripts/run-digest.ts` daily / weekly / monthly. The script connects to Neon, pulls items for the period, invokes `claude --print` with a structured digest prompt, parses the response, and writes `summary_md` back to the `digests` table. Catch-up: each run checks the recent window for missing digests and generates them — so a daily digest missed because the Mac was asleep at 09:00 gets generated whenever the Mac next runs the job. Cost: $0 marginal (uses Max plan capacity, well within rate limits).
 
@@ -225,7 +225,7 @@ One-shot script per source: `npm run backfill:<source>`. Marks items with `backf
 | 2026-05-13 | News aggregator = Google News RSS for v1 | Free and broad. NewsAPI free tier too restricted; paid tier overkill. |
 | 2026-05-13 | Core sources for v1: Google News, SEC EDGAR, Figma blog, Reddit, HN | User confirmed |
 | 2026-05-13 | Tabs: Feed, Digests, Official, Watchlist, Competitors, Analyst | 6 tabs (Chat dropped) |
-| 2026-05-13 | Drop items with classifier relevance < 0.4 | Handles "Figma" false positives (math, foreign-language matches) |
+| 2026-05-13 | Drop items with classifier relevance < 0.5 (raised from 0.4) + tighten priority rubric | First-run backfill produced too many "breaking" items because the original rubric called every S-1/8-K breaking. Default is now 'routine'; only material events escalate. |
 | 2026-05-13 | Insider Activity surfaced as widget inside Official tab | Form 4 already in ingest; no need for a separate tab |
 | 2026-05-13 | Analyst tab = ratings + price-target chart + rating-change events + Seeking Alpha RSS | Full proprietary reports require Bloomberg/Refinitiv; not realistically scrapable |
 | 2026-05-13 | Retention: keep everything forever | DB is small, archival is valuable for digests |

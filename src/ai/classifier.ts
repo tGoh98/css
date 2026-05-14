@@ -44,14 +44,37 @@ Your job is to look at a single piece of content (a news headline + snippet, an 
    - 1.0 = directly about Figma (the company), its products, executives, financials, or a competitor's move that affects Figma.
    - 0.5 = adjacent (the design-tools industry, AI-in-design trends, named competitor news with no direct Figma angle).
    - 0.0 = unrelated (the word "figma" appears but in a different context: a person's name, a math/CS term, an unrelated foreign-language match, a meme, a recruiting post).
-   Be strict. False positives are worse than false negatives — anything below 0.4 will be discarded.
+   Be strict. Anything below 0.5 will be discarded.
 
-2. priority: How urgent is this for the user to see?
-   - 'breaking' = material news a public-company investor would act on within hours (M&A, earnings, executive change, major product launch, lawsuit, regulatory action, S-1/8-K filings, large insider transactions).
-   - 'notable' = meaningful but not urgent (product update, partnership, analyst rating change, industry move, hiring announcement).
-   - 'routine' = community chatter, tutorials, opinion pieces, minor blog posts.
+2. priority: How urgent is this for the user to see? **Default to 'routine'.** Higher tiers are RARE — escalate only when the item meets the criteria below verbatim. When in doubt, drop one tier (breaking → notable, notable → routine).
 
-3. one_line: A single neutral sentence (max ~25 words) summarizing what happened. No editorializing, no hedging language ("appears to", "reportedly"). Past tense.
+   - 'breaking' (~1-3% of items): a material event a public-market investor would act on within hours. ONLY use for ALL of these — not just any one of them in spirit:
+     * M&A announcement, deal close, or termination
+     * Earnings release **with surprise** vs consensus (beat/miss/guidance change)
+     * Sudden executive change (CEO/CFO/founder departure or replacement)
+     * Brand-new top-level product launch (not a feature, not a beta, not an update)
+     * Lawsuit filed or settled with disclosed material exposure
+     * Regulatory action with operational impact
+     * Single insider transaction exceeding ~$1M in disclosed value
+     * Major outage or security incident
+     Note: a fresh SEC filing **is not breaking on its own** — only its *contents* can be. A standard 8-K, 10-K, 10-Q, or S-1/A is 'notable' unless its body describes one of the events above.
+
+   - 'notable' (~10-20% of items): meaningful business or product signal that doesn't demand immediate attention.
+     * Quarterly/annual SEC filings (10-K, 10-Q, S-1) without a surprise inside
+     * 8-Ks that disclose ordinary course changes (governance, comp, routine amendments)
+     * Significant feature launches and roadmap announcements
+     * Named partnerships or integrations with public companies
+     * **Changes** in analyst ratings or price targets (not standing ratings)
+     * Industry-structural moves involving Adobe / Canva / Sketch / AI-design challengers when they plausibly affect Figma
+
+   - 'routine' (the default, expect the majority): everything else.
+     * Community chatter, Reddit / HN discussions, opinion pieces, tutorials
+     * Hiring announcements, conference talks, blog posts, recaps
+     * Routine Form 4 filings (officer/director transactions below the ~$1M bar)
+     * Standing analyst ratings with no change
+     * Tangential mentions, listicles, "best design tools" pieces
+
+3. one_line: A single neutral sentence (max ~25 words) summarizing what happened. No editorializing, no hedging ("appears to", "reportedly"). Past tense.
 
 Output ONLY by calling the \`classify\` tool. Do not write any prose response.`;
 
@@ -165,7 +188,8 @@ export async function classifyItem(input: ClassifyInput): Promise<ClassifyResult
   }
 
   // Drop low-relevance items entirely. cascade removes any side rows.
-  if (parsed.relevance < 0.4) {
+  // Threshold raised from 0.4 → 0.5 (2026-05-13) to reduce feed noise.
+  if (parsed.relevance < 0.5) {
     await db.delete(items).where(eq(items.id, input.itemId));
     return {
       kind: "dropped",

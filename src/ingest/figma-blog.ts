@@ -87,7 +87,11 @@ export async function ingest(): Promise<IngestResult> {
       $card.find("p").first().text().trim() ||
       null;
 
-    // Try to find a <time> element in the card.
+    // Try to find a <time> element in the card. Real blog posts always
+    // carry a published date on their card; category/topic landing pages
+    // don't — so we use the presence of a parseable date as the filter
+    // that separates posts from category links. Without it, the
+    // "Browse by topic" grid inside .blog-body would still leak through.
     let publishedAt: Date | null = null;
     const timeAttr =
       $card.find("time").attr("datetime") ?? $card.find("time").text();
@@ -95,6 +99,7 @@ export async function ingest(): Promise<IngestResult> {
       const d = new Date(timeAttr);
       if (!isNaN(d.getTime())) publishedAt = d;
     }
+    if (!publishedAt) return; // category / topic page — skip
 
     candidates.push({
       url: urlObj.href,
@@ -128,9 +133,9 @@ export async function ingest(): Promise<IngestResult> {
             url: c.url,
             title: c.title,
             snippet: c.snippet,
-            // Fall back to now() if no date found — the AI classifier still works
-            // and the user-visible "Recent" sort just treats it as "today".
-            publishedAt: c.publishedAt ?? new Date(),
+            // publishedAt is guaranteed non-null here — date-less candidates
+            // (i.e. category landing pages) were dropped above.
+            publishedAt: c.publishedAt as Date,
           },
           result,
         );

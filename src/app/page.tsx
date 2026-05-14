@@ -86,7 +86,7 @@ export default async function HomePage() {
                 return (
                   <Link
                     key={d.id}
-                    href={`/digests?period=${d.period}`}
+                    href={`/digests/${d.id}`}
                     className="group block rounded-md border border-border p-3 transition-colors hover:border-foreground/40"
                   >
                     <div className="mb-1 flex items-baseline justify-between gap-3">

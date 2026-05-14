@@ -90,18 +90,30 @@ export default async function DigestsPage({ searchParams }: { searchParams: Sear
       ) : (
         <ul className="flex flex-col gap-4">
           {visible.map((d) => (
-            <li key={d.id}>
+            <li key={d.id} id={`digest-${d.id}`}>
               <Card>
                 <CardHeader>
                   <div className="flex flex-wrap items-baseline justify-between gap-2">
-                    <div>
+                    <div className="min-w-0">
                       <CardTitle className="text-base">
-                        {PERIOD_LABEL[d.period] ?? d.period} digest ·{" "}
-                        {d.periodStart.toLocaleDateString()} → {d.periodEnd.toLocaleDateString()}
+                        <Link
+                          href={`/digests/${d.id}`}
+                          className="hover:underline"
+                        >
+                          {PERIOD_LABEL[d.period] ?? d.period} digest ·{" "}
+                          {d.periodStart.toLocaleDateString()} → {d.periodEnd.toLocaleDateString()}
+                        </Link>
                       </CardTitle>
                       <CardDescription>
                         {relativeTime(d.generatedAt)} · {d.itemIds.length} items
                         {d.model ? ` · ${d.model}` : ""}
+                        {" · "}
+                        <Link
+                          href={`/digests/${d.id}`}
+                          className="text-foreground/70 underline-offset-2 hover:underline"
+                        >
+                          Permalink
+                        </Link>
                       </CardDescription>
                     </div>
                     <Badge variant="outline">{d.period}</Badge>

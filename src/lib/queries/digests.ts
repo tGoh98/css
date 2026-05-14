@@ -5,6 +5,11 @@ import { digests } from "@/db/schema";
 
 export type DigestRow = typeof digests.$inferSelect;
 
+export async function fetchDigestById(id: number): Promise<DigestRow | null> {
+  const [row] = await db.select().from(digests).where(eq(digests.id, id)).limit(1);
+  return row ?? null;
+}
+
 export async function listDigests(
   period?: string,
   limit = 50,

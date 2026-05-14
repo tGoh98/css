@@ -1,29 +1,56 @@
+import Link from "next/link";
 import { FigChart, type ChartEvent } from "@/components/fig-chart";
 import { InsiderActivity } from "@/components/insider-activity";
 import { ItemCard } from "@/components/item-card";
+import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
 import { fetchFeed } from "@/lib/queries/items";
 import { fetchRecentInsiderActivity } from "@/lib/queries/insider";
-import { fetchYahooChart } from "@/lib/queries/yahoo";
+import { fetchChart } from "@/lib/queries/chart";
 
 export const dynamic = "force-dynamic";
 
-export default async function OfficialPage() {
-  // Pull in parallel — chart, insider data, and the recent SEC+blog feed.
-  const [chart, insider, feedItems] = await Promise.all([
-    fetchYahooChart("FIG", "3mo", "1d"),
+const PAGE_SIZE = 25;
+
+type SearchParams = Promise<{ page?: string }>;
+
+export default async function OfficialPage({ searchParams }: { searchParams: SearchParams }) {
+  const sp = await searchParams;
+  const page = Math.max(1, Number(sp.page) || 1);
+  const offset = (page - 1) * PAGE_SIZE;
+
+  const [chart, insider, feedItems, eventItems] = await Promise.all([
+    // Fetch the widest range we offer; FigChart slices on the client when
+    // the user switches range tabs, so this is one trip per page load.
+    fetchChart("FIG", "5y"),
     fetchRecentInsiderActivity(10),
-    fetchFeed({ kinds: ["sec", "blog"] }, { limit: 30, groupByCluster: false }),
+    fetchFeed(
+      { kinds: ["sec", "blog"] },
+      { limit: PAGE_SIZE + 1, offset, groupByCluster: false },
+    ),
+    // Event-marker pool — pulled once at the widest window so range tabs can
+    // filter client-side without re-fetching.
+    fetchFeed(
+      { kinds: ["sec", "blog"] },
+      { limit: 1000, groupByCluster: false },
+    ),
   ]);
 
-  // Build event markers for the chart from items within the chart's date range.
-  // Use the feed we already have — it's pre-filtered to sec+blog kinds.
-  const chartEvents: ChartEvent[] = feedItems.map((fi) => ({
+  const hasNext = feedItems.length > PAGE_SIZE;
+  const visible = hasNext ? feedItems.slice(0, PAGE_SIZE) : feedItems;
+
+  const chartEvents: ChartEvent[] = eventItems.map((fi) => ({
     t: fi.item.publishedAt.getTime(),
     title: fi.item.title,
     url: fi.item.url,
     priority: (fi.classification?.priority as ChartEvent["priority"]) ?? "routine",
+    source: fi.source?.name ?? null,
+    oneLine: fi.classification?.oneLine ?? null,
   }));
+
+  function pageHref(targetPage: number): string {
+    return targetPage > 1 ? `/official?page=${targetPage}` : "/official";
+  }
 
   return (
     <div className="flex flex-col gap-6">
@@ -34,7 +61,7 @@ export default async function OfficialPage() {
         </p>
       </div>
 
-      <FigChart data={chart} events={chartEvents} caption="3 months · daily close" />
+      <FigChart data={chart} events={chartEvents} caption="Daily close" />
 
       <InsiderActivity rows={insider} />
 
@@ -43,19 +70,47 @@ export default async function OfficialPage() {
       <div>
         <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide text-muted-foreground">
           Recent filings & posts
+          {page > 1 ? <span className="ml-2 font-normal text-muted-foreground/60">· page {page}</span> : null}
         </h2>
-        {feedItems.length === 0 ? (
+        {visible.length === 0 ? (
           <div className="rounded-lg border border-dashed border-border p-10 text-center text-sm text-muted-foreground">
-            No SEC filings or blog posts ingested yet.
+            {page > 1 ? (
+              <>No more items on page {page}. <Link href="/official" className="underline">Back to page 1</Link>.</>
+            ) : (
+              <>No SEC filings or blog posts ingested yet.</>
+            )}
           </div>
         ) : (
           <ul className="flex flex-col gap-3">
-            {feedItems.map((fi) => (
+            {visible.map((fi) => (
               <li key={fi.item.id}>
                 <ItemCard feedItem={fi} />
               </li>
             ))}
           </ul>
+        )}
+
+        {(page > 1 || hasNext) && (
+          <nav
+            aria-label="Official pagination"
+            className="mt-8 flex items-center justify-between border-t border-border pt-4"
+          >
+            <Button asChild variant="outline" size="sm" disabled={page <= 1} aria-disabled={page <= 1}>
+              {page > 1 ? (
+                <Link href={pageHref(page - 1)} prefetch={false}>← Previous</Link>
+              ) : (
+                <span aria-disabled className="opacity-50">← Previous</span>
+              )}
+            </Button>
+            <span className="text-xs text-muted-foreground">Page {page}</span>
+            <Button asChild variant="outline" size="sm" disabled={!hasNext} aria-disabled={!hasNext}>
+              {hasNext ? (
+                <Link href={pageHref(page + 1)} prefetch={false}>Next →</Link>
+              ) : (
+                <span aria-disabled className="opacity-50">Next →</span>
+              )}
+            </Button>
+          </nav>
         )}
       </div>
     </div>

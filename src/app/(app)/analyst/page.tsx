@@ -1,69 +1,61 @@
-import { AnalystSummary } from "@/components/analyst-summary";
-import { FigChart, type ChartEvent } from "@/components/fig-chart";
-import { ItemCard } from "@/components/item-card";
-import { Separator } from "@/components/ui/separator";
-import { fetchFeed } from "@/lib/queries/items";
-import { fetchYahooAnalyst, fetchYahooChart } from "@/lib/queries/yahoo";
+import { AnalystConsensus } from "@/components/analyst-consensus";
+import { AnalystQuote } from "@/components/analyst-quote";
+import { AnalystTrend } from "@/components/analyst-trend";
+import { EarningsSurprise } from "@/components/earnings-surprise";
+import {
+  fetchEarningsHistory,
+  fetchNextEarnings,
+  fetchQuote,
+  fetchRecommendations,
+} from "@/lib/queries/finnhub";
 
 export const dynamic = "force-dynamic";
 
+const SYMBOL = "FIG";
+
 export default async function AnalystPage() {
-  const [chart, snapshot, seekingItems, reportItems] = await Promise.all([
-    // 1 year of FIG closes — gives a better view of price-target evolution.
-    fetchYahooChart("FIG", "1y", "1wk"),
-    fetchYahooAnalyst("FIG"),
-    // Seeking Alpha items come in via the analyst poller (kind='news'); match
-    // by source.name. Uploaded analyst PDFs are kind='analyst-report'.
-    // Two queries + merge keeps fetchFeed's filter API simple (single brand,
-    // not OR-by-kind-or-name).
-    fetchFeed({ brand: "seeking" }, { limit: 30, groupByCluster: false }),
-    fetchFeed({ kinds: ["analyst-report"] }, { limit: 30, groupByCluster: false }),
+  const keyMissing = !process.env.FINNHUB_API_KEY;
+
+  if (keyMissing) {
+    return (
+      <div className="mx-auto max-w-2xl">
+        <h1 className="text-xl font-semibold tracking-tight">Analyst</h1>
+        <p className="mt-4 rounded-lg border border-dashed border-border p-6 text-sm text-muted-foreground">
+          <code className="rounded bg-muted px-1.5 py-0.5">FINNHUB_API_KEY</code> isn&apos;t set
+          in this environment. Add it to your Vercel env vars (and to{" "}
+          <code className="rounded bg-muted px-1.5 py-0.5">.env.local</code> for local dev) to
+          enable this tab.
+        </p>
+      </div>
+    );
+  }
+
+  const [quote, next, recs, earnings] = await Promise.all([
+    fetchQuote(SYMBOL),
+    fetchNextEarnings(SYMBOL),
+    fetchRecommendations(SYMBOL),
+    fetchEarningsHistory(SYMBOL),
   ]);
-
-  const analystItems = [...seekingItems, ...reportItems]
-    .sort((a, b) => b.item.publishedAt.getTime() - a.item.publishedAt.getTime())
-    .slice(0, 30);
-
-  const events: ChartEvent[] = analystItems.map((fi) => ({
-    t: fi.item.publishedAt.getTime(),
-    title: fi.item.title,
-    url: fi.item.url,
-    priority: (fi.classification?.priority as ChartEvent["priority"]) ?? "routine",
-  }));
 
   return (
     <div className="flex flex-col gap-6">
       <div>
         <h1 className="text-xl font-semibold tracking-tight">Analyst</h1>
         <p className="text-xs text-muted-foreground">
-          Consensus ratings, price targets, and analyst coverage for FIG
+          Live quote, consensus coverage, and earnings track record for FIG · sourced from Finnhub
         </p>
       </div>
 
-      <AnalystSummary data={snapshot} />
+      <AnalystQuote quote={quote} next={next} />
+      <AnalystConsensus rows={recs} />
+      <AnalystTrend rows={recs} />
+      <EarningsSurprise rows={earnings} />
 
-      <FigChart data={chart} events={events} caption="1 year · weekly close" />
-
-      <Separator />
-
-      <div>
-        <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide text-muted-foreground">
-          Coverage feed
-        </h2>
-        {analystItems.length === 0 ? (
-          <div className="rounded-lg border border-dashed border-border p-10 text-center text-sm text-muted-foreground">
-            No analyst items ingested yet (Seeking Alpha RSS, etc.).
-          </div>
-        ) : (
-          <ul className="flex flex-col gap-3">
-            {analystItems.map((fi) => (
-              <li key={fi.item.id}>
-                <ItemCard feedItem={fi} />
-              </li>
-            ))}
-          </ul>
-        )}
-      </div>
+      <p className="text-[11px] text-muted-foreground/80">
+        Quote refreshes every ~60s; recommendation snapshots and earnings hourly. Premium
+        Finnhub data (individual analyst upgrades/downgrades, price targets, estimate
+        revisions) isn&apos;t included — those endpoints are paywalled.
+      </p>
     </div>
   );
 }

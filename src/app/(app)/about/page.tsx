@@ -12,6 +12,44 @@ export default function AboutPage() {
         </p>
       </div>
 
+      <div
+        role="alert"
+        className="rounded-lg border-2 border-destructive bg-destructive/10 p-4 text-sm text-foreground"
+      >
+        <div className="mb-2 flex items-center gap-2 text-base font-bold uppercase tracking-wide text-destructive">
+          <span aria-hidden>⚠</span>
+          <span>Read this before trusting anything below</span>
+        </div>
+        <ul className="list-disc space-y-2 pl-5 leading-relaxed">
+          <li>
+            <strong>This is NOT investment advice.</strong> Nothing on this
+            site — feed cards, AI summaries, digests, the Analyst tab, the
+            chart, the insider widget, none of it — is a recommendation to
+            buy, sell, or hold any security. It&apos;s a personal news
+            aggregator for one person who happens to follow Figma.
+          </li>
+          <li>
+            <strong>This site is vibe-coded.</strong> Built one prompt at a
+            time with Claude Code, almost entirely without manual code review.
+            Bugs, broken parsers, miscounted shares, mis-tagged sources, and
+            other quiet wrongness are all plausible.
+          </li>
+          <li>
+            <strong>The AI hallucinates.</strong> Claude Haiku classifies every
+            item and Claude Opus writes the digests. The probability of
+            hallucinated facts, wrong dates, wrong dollar amounts, or
+            fabricated citations is <em>non-zero</em>. The classifier prompt
+            also runs over untrusted third-party text and can be tricked.
+          </li>
+          <li>
+            <strong>Validate everything yourself.</strong> Click through to the
+            original source (SEC EDGAR, the linked news article, the Form 4
+            XML) before acting on anything. If the AI says a CFO sold 50,000
+            shares, go read the filing.
+          </li>
+        </ul>
+      </div>
+
       <Card>
         <CardHeader>
           <CardTitle className="text-base">What it does</CardTitle>
@@ -50,10 +88,6 @@ export default function AboutPage() {
               AI challengers (Google Stitch, Pencil, Galileo AI, Uizard,
               Anthropic&apos;s Claude design)
             </li>
-            <li>
-              <strong>Yahoo Finance &amp; Seeking Alpha</strong> — analyst
-              ratings, price targets
-            </li>
           </ul>
         </CardContent>
       </Card>
@@ -65,7 +99,7 @@ export default function AboutPage() {
         <CardContent className="text-sm leading-relaxed text-foreground/90 space-y-3">
           <p>
             <strong>Ingestion</strong> runs every 15 minutes (news, Reddit, HN)
-            or hourly (SEC, Figma blog, competitors, analyst) via GitHub
+            or hourly (SEC, Figma blog, competitors) via GitHub
             Actions cron. New items get a single Claude Haiku call for
             relevance + priority.
           </p>
@@ -111,7 +145,9 @@ export default function AboutPage() {
               competing tools
             </li>
             <li>
-              <strong>Analyst</strong> — consensus ratings and analyst commentary
+              <strong>Analyst</strong> — live FIG quote, analyst consensus,
+              monthly recommendation trend, and earnings beat/miss history
+              (via Finnhub)
             </li>
           </ul>
         </CardContent>

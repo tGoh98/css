@@ -7,8 +7,8 @@ const PUBLIC_TABS = [
   { label: "Feed", href: "/feed" },
   { label: "Digests", href: "/digests" },
   { label: "Official", href: "/official" },
-  { label: "Competitors", href: "/competitors" },
   { label: "Analyst", href: "/analyst" },
+  { label: "Competitors", href: "/competitors" },
   { label: "About", href: "/about" },
 ] as const;
 

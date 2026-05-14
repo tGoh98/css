@@ -4,7 +4,6 @@ import { eq } from "drizzle-orm";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { Separator } from "@/components/ui/separator";
-import { BookmarkButton } from "@/components/bookmark-button";
 import { ItemNotes } from "@/components/item-notes";
 import { PriorityBadge } from "@/components/priority-badge";
 import { db } from "@/db";
@@ -21,7 +20,7 @@ export default async function ItemDetailPage({ params }: { params: Promise<{ id:
 
   const fi = await fetchItemById(itemId);
   if (!fi) notFound();
-  const { item, classification, source, bookmarked } = fi;
+  const { item, classification, source } = fi;
 
   const [noteRow] = await db
     .select()
@@ -37,21 +36,18 @@ export default async function ItemDetailPage({ params }: { params: Promise<{ id:
 
       <Card>
         <CardHeader>
-          <div className="flex items-start justify-between gap-3">
-            <div className="min-w-0 flex-1">
-              <div className="mb-2 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
-                {source && (
-                  <Badge variant="outline" className="text-[10px]">
-                    {source.name}
-                  </Badge>
-                )}
-                <PriorityBadge priority={classification?.priority} />
-                <span>{relativeTime(item.publishedAt)}</span>
-                {item.author && <span>· {item.author}</span>}
-              </div>
-              <h1 className="text-lg font-semibold leading-snug">{item.title}</h1>
+          <div className="min-w-0 flex-1">
+            <div className="mb-2 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+              {source && (
+                <Badge variant="outline" className="text-[10px]">
+                  {source.name}
+                </Badge>
+              )}
+              <PriorityBadge priority={classification?.priority} />
+              <span>{relativeTime(item.publishedAt)}</span>
+              {item.author && <span>· {item.author}</span>}
             </div>
-            <BookmarkButton itemId={item.id} initial={bookmarked} size="icon-sm" />
+            <h1 className="text-lg font-semibold leading-snug">{item.title}</h1>
           </div>
         </CardHeader>
         <CardContent>

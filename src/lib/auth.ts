@@ -28,7 +28,9 @@ export const authConfig = {
   },
   callbacks: {
     async signIn({ account, profile }) {
-      // Only enforce the allowlist for GitHub sign-ins.
+      // The public site is unauthenticated; only admin paths require login.
+      // The allowlist is kept as defense-in-depth so a non-admin GitHub
+      // user can't even create a stray users-table row.
       if (account?.provider !== "github") return true;
       const allowlist = getAllowlist();
       if (allowlist.length === 0) return false;

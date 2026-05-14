@@ -7,8 +7,11 @@ export default function LoginPage() {
     <div className="mx-auto mt-24 max-w-md">
       <Card>
         <CardHeader>
-          <CardTitle>Sign in</CardTitle>
-          <CardDescription>Claudy Simple Server is invite-only.</CardDescription>
+          <CardTitle>Admin sign-in</CardTitle>
+          <CardDescription>
+            Most of Claudy Simple Server is public — you only need to sign in
+            to manage competitors and other admin settings.
+          </CardDescription>
         </CardHeader>
         <CardContent>
           <form

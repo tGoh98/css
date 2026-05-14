@@ -13,17 +13,18 @@ export const authConfig = {
   providers: [],
   callbacks: {
     authorized({ auth, request }) {
+      // The public site (Feed, Digests, Official, Competitors, Analyst,
+      // About, item detail, search API) is unauthenticated — content is
+      // sourced from public news/SEC/HN/Reddit/etc. anyway.
+      //
+      // Only /admin/* requires a signed-in admin (additionally gated by
+      // isAdminUsername inside the page + server actions).
+      //
+      // /api/cron/* and /api/webhooks/* enforce their own bearer-token
+      // checks inside the handlers; they don't need a NextAuth session.
       const { pathname } = request.nextUrl;
-      // Public routes; cron is gated by CRON_SECRET inside the handlers.
-      if (
-        pathname === "/login" ||
-        pathname === "/unauthorized" ||
-        pathname.startsWith("/api/auth") ||
-        pathname.startsWith("/api/cron")
-      ) {
-        return true;
-      }
-      return !!auth?.user;
+      if (pathname.startsWith("/admin")) return !!auth?.user;
+      return true;
     },
   },
 } satisfies NextAuthConfig;

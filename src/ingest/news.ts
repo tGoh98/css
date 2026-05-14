@@ -57,11 +57,8 @@ export async function ingest(): Promise<IngestResult> {
   // Anthropic) blows past Vercel Hobby's 60s function cap on the first run.
   // Cap per-cycle work and parallelize the classifier calls. Items beyond
   // MAX_ITEMS are the older ones and will be ingested in subsequent ticks
-  // as the feed shifts.
-  //
-  // EARNINGS WINDOW (2026-05-14 → 2026-05-16): bumped 30 → 60 to catch the
-  // press-release spike. At CONCURRENCY=6 and ~1s/classify, 60 items takes
-  // ~10s — comfortable under the 60s function cap. REVERT to 30 after.
+  // as the feed shifts. At CONCURRENCY=6 and ~1s/classify, 60 items takes
+  // ~10s — comfortable under the 60s function cap.
   const MAX_ITEMS = 60;
   const CONCURRENCY = 6;
   const entries = (feed.items as GoogleNewsItem[]).slice(0, MAX_ITEMS);

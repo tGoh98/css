@@ -1,0 +1,635 @@
+/**
+ * Local digest worker — runs on the owner's Mac via launchd.
+ *
+ * Pulls items for the requested period from Neon, builds a prompt, invokes
+ * `claude --print` (Sonnet 4.6 via Max plan), parses Markdown output, and
+ * writes a row into the `digests` table.
+ *
+ * Usage:
+ *   tsx scripts/run-digest.ts --period day   --date 2026-05-12
+ *   tsx scripts/run-digest.ts --period week  --date 2026-05-04
+ *   tsx scripts/run-digest.ts --period month --date 2026-04-01
+ *   tsx scripts/run-digest.ts --period day   --catch-up
+ *
+ * Reads env (DATABASE_URL, APP_URL, DIGEST_WEBHOOK_SECRET) from
+ * ~/.config/css/digest.env (one KEY=VAL per line).
+ *
+ * Hard failures exit 1. Per-period generation failures are logged and the
+ * next period is attempted. Exits 0 on success.
+ */
+
+import { spawn } from "node:child_process";
+import { appendFileSync, existsSync, mkdirSync, readFileSync } from "node:fs";
+import { homedir } from "node:os";
+import { dirname, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+
+// ---------------------------------------------------------------------------
+// Env loading — read ~/.config/css/digest.env before anything else.
+// ---------------------------------------------------------------------------
+
+const HOME = process.env.HOME || homedir();
+const ENV_FILE = resolve(HOME, ".config/css/digest.env");
+
+function loadEnvFile(path: string): void {
+  if (!existsSync(path)) return;
+  const lines = readFileSync(path, "utf8").split("\n");
+  for (const raw of lines) {
+    const line = raw.trim();
+    if (!line || line.startsWith("#")) continue;
+    const eq = line.indexOf("=");
+    if (eq <= 0) continue;
+    const key = line.slice(0, eq).trim();
+    let val = line.slice(eq + 1).trim();
+    // Strip surrounding single/double quotes if present.
+    if (
+      (val.startsWith('"') && val.endsWith('"')) ||
+      (val.startsWith("'") && val.endsWith("'"))
+    ) {
+      val = val.slice(1, -1);
+    }
+    if (!process.env[key]) process.env[key] = val;
+  }
+}
+
+try {
+  // Prefer dotenv if installed, fall back to manual parse.
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const dotenv = require("dotenv");
+  if (dotenv && typeof dotenv.config === "function") {
+    dotenv.config({ path: ENV_FILE });
+  } else {
+    loadEnvFile(ENV_FILE);
+  }
+} catch {
+  loadEnvFile(ENV_FILE);
+}
+
+// ---------------------------------------------------------------------------
+// Logging — to ~/.local/state/css/digest.log.
+// ---------------------------------------------------------------------------
+
+const LOG_DIR = resolve(HOME, ".local/state/css");
+const LOG_FILE = resolve(LOG_DIR, "digest.log");
+
+try {
+  mkdirSync(LOG_DIR, { recursive: true });
+} catch {
+  // ignore — logging failures must not crash the worker.
+}
+
+function log(fields: Record<string, unknown>): void {
+  const ts = new Date().toISOString();
+  const payload = JSON.stringify({ ts, ...fields });
+  // Also surface to stdout so launchd's StandardOutPath captures it.
+  console.log(payload);
+  try {
+    appendFileSync(LOG_FILE, payload + "\n");
+  } catch {
+    // ignore
+  }
+}
+
+// ---------------------------------------------------------------------------
+// CLI args.
+// ---------------------------------------------------------------------------
+
+type Period = "day" | "week" | "month";
+
+interface Args {
+  period: Period;
+  date?: string; // YYYY-MM-DD anchoring the period
+  catchUp: boolean;
+}
+
+function parseArgs(argv: string[]): Args {
+  let period: Period | undefined;
+  let date: string | undefined;
+  let catchUp = false;
+  for (let i = 0; i < argv.length; i++) {
+    const a = argv[i];
+    if (a === "--period") {
+      const next = argv[++i];
+      if (next === "day" || next === "daily") period = "day";
+      else if (next === "week" || next === "weekly") period = "week";
+      else if (next === "month" || next === "monthly") period = "month";
+      else throw new Error(`Unknown --period value: ${next}`);
+    } else if (a === "--date") {
+      date = argv[++i];
+    } else if (a === "--catch-up" || a === "--catchup") {
+      catchUp = true;
+    } else if (a === "--help" || a === "-h") {
+      console.log(
+        "Usage: tsx scripts/run-digest.ts --period day|week|month [--date YYYY-MM-DD] [--catch-up]",
+      );
+      process.exit(0);
+    }
+  }
+  if (!period) throw new Error("--period is required (day|week|month)");
+  return { period, date, catchUp };
+}
+
+// ---------------------------------------------------------------------------
+// Period math — all timestamps are UTC for stability.
+// ---------------------------------------------------------------------------
+
+interface PeriodRange {
+  periodStart: Date;
+  periodEnd: Date; // exclusive
+}
+
+function startOfUTCDay(d: Date): Date {
+  return new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()));
+}
+
+function addDays(d: Date, n: number): Date {
+  const out = new Date(d);
+  out.setUTCDate(out.getUTCDate() + n);
+  return out;
+}
+
+function startOfISOWeek(d: Date): Date {
+  // Monday is day 1 in ISO; getUTCDay returns 0=Sun..6=Sat.
+  const day = d.getUTCDay();
+  const diff = day === 0 ? -6 : 1 - day;
+  return addDays(startOfUTCDay(d), diff);
+}
+
+function startOfUTCMonth(d: Date): Date {
+  return new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), 1));
+}
+
+function addMonths(d: Date, n: number): Date {
+  return new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + n, 1));
+}
+
+function rangeFor(period: Period, anchor: Date): PeriodRange {
+  if (period === "day") {
+    const start = startOfUTCDay(anchor);
+    return { periodStart: start, periodEnd: addDays(start, 1) };
+  }
+  if (period === "week") {
+    const start = startOfISOWeek(anchor);
+    return { periodStart: start, periodEnd: addDays(start, 7) };
+  }
+  const start = startOfUTCMonth(anchor);
+  return { periodStart: start, periodEnd: addMonths(start, 1) };
+}
+
+function defaultAnchor(period: Period, now: Date): Date {
+  // "The most recent complete period ending before now."
+  if (period === "day") return addDays(startOfUTCDay(now), -1);
+  if (period === "week") return addDays(startOfISOWeek(now), -7);
+  return addMonths(startOfUTCMonth(now), -1);
+}
+
+function parseDateArg(s: string): Date {
+  // Accept YYYY-MM-DD; interpret as UTC midnight.
+  const m = s.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!m) throw new Error(`--date must be YYYY-MM-DD, got: ${s}`);
+  return new Date(Date.UTC(+m[1], +m[2] - 1, +m[3]));
+}
+
+function periodsForCatchUp(period: Period, now: Date): PeriodRange[] {
+  const out: PeriodRange[] = [];
+  if (period === "day") {
+    // Last 14 complete days.
+    for (let i = 1; i <= 14; i++) {
+      out.push(rangeFor("day", addDays(now, -i)));
+    }
+  } else if (period === "week") {
+    // Last 8 complete ISO weeks.
+    const thisWeekStart = startOfISOWeek(now);
+    for (let i = 1; i <= 8; i++) {
+      out.push(rangeFor("week", addDays(thisWeekStart, -7 * i)));
+    }
+  } else {
+    // Last 3 complete months.
+    const thisMonthStart = startOfUTCMonth(now);
+    for (let i = 1; i <= 3; i++) {
+      out.push(rangeFor("month", addMonths(thisMonthStart, -i)));
+    }
+  }
+  return out;
+}
+
+// ---------------------------------------------------------------------------
+// DB — import drizzle setup from src.
+// ---------------------------------------------------------------------------
+
+// Resolve relative to this file so launchd's `cd` quirks don't break imports.
+const HERE = dirname(fileURLToPath(import.meta.url));
+const REPO_ROOT = resolve(HERE, "..");
+
+// Dynamic import after env is loaded so DATABASE_URL is available.
+async function loadDb() {
+  const dbMod = await import(resolve(REPO_ROOT, "src/db/index.ts"));
+  return { db: dbMod.db, schema: dbMod.schema };
+}
+
+// ---------------------------------------------------------------------------
+// Item query + prompt building.
+// ---------------------------------------------------------------------------
+
+interface DigestItem {
+  id: number;
+  title: string;
+  url: string;
+  source: string;
+  oneLine: string;
+  priority: "breaking" | "notable" | "routine";
+  publishedAt: Date;
+}
+
+const ITEM_CAP = 150;
+
+async function fetchItemsForPeriod(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  db: any,
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  schema: any,
+  range: PeriodRange,
+): Promise<DigestItem[]> {
+  const { items, itemClassifications, sources } = schema;
+  // Drizzle imports — use sql ops via drizzle-orm.
+  const drizzleOrm = await import("drizzle-orm");
+  const { and, gte, lt, sql: dsql, eq, desc } = drizzleOrm;
+
+  const rows = await db
+    .select({
+      id: items.id,
+      title: items.title,
+      url: items.url,
+      sourceName: sources.name,
+      oneLine: itemClassifications.oneLine,
+      priority: itemClassifications.priority,
+      relevance: itemClassifications.relevance,
+      publishedAt: items.publishedAt,
+    })
+    .from(items)
+    .innerJoin(itemClassifications, eq(itemClassifications.itemId, items.id))
+    .innerJoin(sources, eq(sources.id, items.sourceId))
+    .where(
+      and(
+        gte(items.publishedAt, range.periodStart),
+        lt(items.publishedAt, range.periodEnd),
+        // relevance >= 0.4 (column is numeric → text cast or just compare as string-safe via sql)
+        dsql`${itemClassifications.relevance} >= 0.4`,
+      ),
+    )
+    // Order: priority (breaking > notable > routine), then published_at desc.
+    .orderBy(
+      dsql`case ${itemClassifications.priority}
+              when 'breaking' then 0
+              when 'notable' then 1
+              else 2
+            end`,
+      desc(items.publishedAt),
+    )
+    .limit(ITEM_CAP);
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  return rows.map((r: any) => ({
+    id: r.id,
+    title: r.title,
+    url: r.url,
+    source: r.sourceName,
+    oneLine: r.oneLine,
+    priority: r.priority,
+    publishedAt: new Date(r.publishedAt),
+  }));
+}
+
+function buildPrompt(period: Period, range: PeriodRange, items: DigestItem[]): string {
+  const grouped: Record<DigestItem["priority"], DigestItem[]> = {
+    breaking: [],
+    notable: [],
+    routine: [],
+  };
+  for (const it of items) grouped[it.priority]?.push(it);
+
+  const fmt = (it: DigestItem) =>
+    `- [${it.title}](${it.url}) — *${it.source}* — ${it.oneLine}`;
+
+  const sections: string[] = [];
+  if (grouped.breaking.length) {
+    sections.push(`### Breaking items\n${grouped.breaking.map(fmt).join("\n")}`);
+  }
+  if (grouped.notable.length) {
+    sections.push(`### Notable items\n${grouped.notable.map(fmt).join("\n")}`);
+  }
+  if (grouped.routine.length) {
+    sections.push(`### Routine items\n${grouped.routine.map(fmt).join("\n")}`);
+  }
+  const itemsBlock = sections.length ? sections.join("\n\n") : "_(no qualifying items)_";
+
+  const periodLabel =
+    period === "day" ? "daily" : period === "week" ? "weekly" : "monthly";
+  const startStr = range.periodStart.toISOString().slice(0, 10);
+  const endStr = new Date(range.periodEnd.getTime() - 1).toISOString().slice(0, 10);
+
+  return [
+    `You are writing a ${periodLabel} digest about Figma (the company / FIG ticker) for a single technical reader.`,
+    `Period: ${startStr} → ${endStr} (UTC, end inclusive). Total items: ${items.length}.`,
+    ``,
+    `Below are the items already classified for relevance and priority. Synthesize them — group related items, surface the actual story, name names, include numbers (share counts, prices, dates).`,
+    ``,
+    `Output **Markdown only** with exactly these four H2 sections, in this order:`,
+    ``,
+    `## Breaking`,
+    `## Notable`,
+    `## Routine`,
+    `## What to watch`,
+    ``,
+    `Rules:`,
+    `- Each section is 1–6 short bullets. "Breaking" may be empty (write "_None._").`,
+    `- "What to watch" forecasts the next ${periodLabel === "daily" ? "few days" : periodLabel === "weekly" ? "weeks" : "months"} based on what's in the items (no speculation beyond that).`,
+    `- Cite items inline like [TechCrunch](url) — the URLs are already in the list below.`,
+    `- Do NOT preface with "Here is the digest" or similar. Start directly with \`## Breaking\`.`,
+    `- Do NOT invent items or facts not present below.`,
+    ``,
+    `Items:`,
+    ``,
+    itemsBlock,
+  ].join("\n");
+}
+
+// ---------------------------------------------------------------------------
+// Invoke claude --print.
+// ---------------------------------------------------------------------------
+
+const CLAUDE_MODEL = "claude-sonnet-4-6";
+const CLAUDE_BIN = process.env.CLAUDE_BIN || "claude";
+
+interface ClaudeResult {
+  text: string;
+  modelLabel: string;
+}
+
+async function invokeClaude(prompt: string): Promise<ClaudeResult> {
+  // We try JSON output first; if the CLI version doesn't support it we fall
+  // back to plain text. The current Claude Code CLI (verified via `claude
+  // --help`) supports --print, --output-format json, and --model, so the JSON
+  // path is preferred.
+  try {
+    const json = await runClaudeJson(prompt);
+    return {
+      text: json,
+      modelLabel: `${CLAUDE_MODEL} (via Claude Code)`,
+    };
+  } catch (err) {
+    log({ level: "warn", event: "claude_json_failed", err: String(err) });
+    const text = await runClaudeText(prompt);
+    return {
+      text,
+      modelLabel: `${CLAUDE_MODEL} (via Claude Code, text fallback)`,
+    };
+  }
+}
+
+function runClaudeOnce(args: string[], prompt: string): Promise<string> {
+  return new Promise((resolveFn, rejectFn) => {
+    const child = spawn(CLAUDE_BIN, args, { stdio: ["pipe", "pipe", "pipe"] });
+    let stdout = "";
+    let stderr = "";
+    child.stdout.on("data", (chunk) => {
+      stdout += chunk.toString("utf8");
+    });
+    child.stderr.on("data", (chunk) => {
+      stderr += chunk.toString("utf8");
+    });
+    child.on("error", rejectFn);
+    child.on("close", (code) => {
+      if (code === 0) resolveFn(stdout);
+      else rejectFn(new Error(`claude exited ${code}: ${stderr.slice(0, 400)}`));
+    });
+    child.stdin.write(prompt);
+    child.stdin.end();
+  });
+}
+
+async function runClaudeJson(prompt: string): Promise<string> {
+  const raw = await runClaudeOnce(
+    ["--print", "--output-format", "json", "--model", CLAUDE_MODEL],
+    prompt,
+  );
+  const parsed = JSON.parse(raw);
+  if (parsed && typeof parsed.result === "string") return parsed.result;
+  if (parsed && parsed.is_error) {
+    throw new Error(`claude json is_error: ${parsed.api_error_status ?? "unknown"}`);
+  }
+  throw new Error("claude JSON missing .result field");
+}
+
+async function runClaudeText(prompt: string): Promise<string> {
+  return runClaudeOnce(["--print", "--model", CLAUDE_MODEL], prompt);
+}
+
+function validateDigest(md: string): boolean {
+  const headings = ["## Breaking", "## Notable", "## Routine", "## What to watch"];
+  return headings.some((h) => md.includes(h));
+}
+
+// ---------------------------------------------------------------------------
+// DB write + webhook ping.
+// ---------------------------------------------------------------------------
+
+async function digestExists(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  db: any,
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  schema: any,
+  period: Period,
+  range: PeriodRange,
+): Promise<boolean> {
+  const { digests } = schema;
+  const { and, eq } = await import("drizzle-orm");
+  const rows = await db
+    .select({ id: digests.id })
+    .from(digests)
+    .where(and(eq(digests.period, period), eq(digests.periodStart, range.periodStart)))
+    .limit(1);
+  return rows.length > 0;
+}
+
+async function insertDigest(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  db: any,
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  schema: any,
+  row: {
+    period: Period;
+    periodStart: Date;
+    periodEnd: Date;
+    summaryMd: string;
+    itemIds: number[];
+    model: string;
+  },
+): Promise<number | null> {
+  const { digests } = schema;
+  const inserted = await db
+    .insert(digests)
+    .values({
+      period: row.period,
+      periodStart: row.periodStart,
+      periodEnd: row.periodEnd,
+      summaryMd: row.summaryMd,
+      itemIds: row.itemIds,
+      model: row.model,
+    })
+    .onConflictDoNothing({ target: [digests.period, digests.periodStart] })
+    .returning({ id: digests.id });
+  return inserted[0]?.id ?? null;
+}
+
+async function pingWebhook(digestId: number): Promise<void> {
+  const appUrl = process.env.APP_URL;
+  const secret = process.env.DIGEST_WEBHOOK_SECRET;
+  if (!appUrl || !secret) {
+    log({ level: "warn", event: "webhook_skipped", reason: "missing APP_URL or DIGEST_WEBHOOK_SECRET" });
+    return;
+  }
+  try {
+    const res = await fetch(`${appUrl.replace(/\/$/, "")}/api/webhooks/digest-published`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ digestId, secret }),
+    });
+    log({
+      level: res.ok ? "info" : "warn",
+      event: "webhook_posted",
+      digestId,
+      status: res.status,
+    });
+  } catch (err) {
+    log({ level: "warn", event: "webhook_failed", digestId, err: String(err) });
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Main per-period flow.
+// ---------------------------------------------------------------------------
+
+async function generateOne(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  db: any,
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  schema: any,
+  period: Period,
+  range: PeriodRange,
+): Promise<void> {
+  const startStr = range.periodStart.toISOString();
+  const endStr = range.periodEnd.toISOString();
+  try {
+    if (await digestExists(db, schema, period, range)) {
+      log({ level: "info", event: "skip_exists", period, periodStart: startStr });
+      return;
+    }
+
+    const items = await fetchItemsForPeriod(db, schema, range);
+    if (items.length === 0) {
+      log({
+        level: "info",
+        event: "skip_no_items",
+        period,
+        periodStart: startStr,
+        periodEnd: endStr,
+      });
+      return;
+    }
+
+    const prompt = buildPrompt(period, range, items);
+    const { text, modelLabel } = await invokeClaude(prompt);
+
+    if (!validateDigest(text)) {
+      log({
+        level: "warn",
+        event: "digest_missing_sections",
+        period,
+        periodStart: startStr,
+        chars: text.length,
+      });
+    }
+
+    const id = await insertDigest(db, schema, {
+      period,
+      periodStart: range.periodStart,
+      periodEnd: range.periodEnd,
+      summaryMd: text,
+      itemIds: items.map((i) => i.id),
+      model: modelLabel,
+    });
+
+    log({
+      level: "info",
+      event: "digest_written",
+      period,
+      periodStart: startStr,
+      periodEnd: endStr,
+      itemCount: items.length,
+      digestId: id,
+      model: modelLabel,
+      status: "ok",
+    });
+
+    if (id !== null) await pingWebhook(id);
+  } catch (err) {
+    log({
+      level: "error",
+      event: "digest_failed",
+      period,
+      periodStart: startStr,
+      err: err instanceof Error ? err.message : String(err),
+      stack: err instanceof Error ? err.stack : undefined,
+    });
+  }
+}
+
+async function main(): Promise<void> {
+  const args = parseArgs(process.argv.slice(2));
+
+  if (!process.env.DATABASE_URL) {
+    log({ level: "error", event: "missing_database_url", envFile: ENV_FILE });
+    process.exit(1);
+  }
+
+  const { db, schema } = await loadDb();
+  const now = new Date();
+
+  let ranges: PeriodRange[];
+  if (args.catchUp) {
+    ranges = periodsForCatchUp(args.period, now);
+  } else {
+    const anchor = args.date ? parseDateArg(args.date) : defaultAnchor(args.period, now);
+    ranges = [rangeFor(args.period, anchor)];
+  }
+
+  log({
+    level: "info",
+    event: "run_start",
+    period: args.period,
+    catchUp: args.catchUp,
+    ranges: ranges.map((r) => ({
+      start: r.periodStart.toISOString(),
+      end: r.periodEnd.toISOString(),
+    })),
+  });
+
+  for (const range of ranges) {
+    await generateOne(db, schema, args.period, range);
+  }
+
+  log({ level: "info", event: "run_end", period: args.period });
+}
+
+main()
+  .then(() => process.exit(0))
+  .catch((err) => {
+    log({
+      level: "error",
+      event: "fatal",
+      err: err instanceof Error ? err.message : String(err),
+      stack: err instanceof Error ? err.stack : undefined,
+    });
+    process.exit(1);
+  });

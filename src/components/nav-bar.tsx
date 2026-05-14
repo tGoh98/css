@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { SearchCommand } from "@/components/search-command";
 
 const TABS = [
   { label: "Feed", href: "/feed" },
@@ -7,6 +8,7 @@ const TABS = [
   { label: "Watchlist", href: "/watchlist" },
   { label: "Competitors", href: "/competitors" },
   { label: "Analyst", href: "/analyst" },
+  { label: "Saved", href: "/saved" },
 ] as const;
 
 export function NavBar() {
@@ -27,6 +29,7 @@ export function NavBar() {
             </Link>
           ))}
         </nav>
+        <SearchCommand />
       </div>
     </header>
   );

@@ -9,7 +9,14 @@
     "lint": "eslint .",
     "db:generate": "drizzle-kit generate",
     "db:migrate": "tsx scripts/db-migrate.ts",
-    "db:push": "drizzle-kit push"
+    "db:push": "drizzle-kit push",
+    "seed": "tsx scripts/seed.ts",
+    "backfill:all": "tsx scripts/backfill/all.ts",
+    "backfill:sec": "tsx scripts/backfill/sec.ts",
+    "backfill:hn": "tsx scripts/backfill/hn.ts",
+    "backfill:figma-blog": "tsx scripts/backfill/figma-blog.ts",
+    "backfill:reddit": "tsx scripts/backfill/reddit.ts",
+    "backfill:competitors": "tsx scripts/backfill/competitors.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "0.96.0",

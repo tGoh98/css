@@ -1,0 +1,54 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  CSS monthly digest worker.
+
+  Before installing this plist:
+    1. Find your tsx path:    which tsx
+    2. Replace TSX_PATH below with that absolute path (e.g. /opt/homebrew/bin/tsx).
+    3. Replace HOME_PATH below with your home directory (e.g. /Users/tgoh).
+    4. Copy this file to ~/Library/LaunchAgents/ and run:
+         launchctl load ~/Library/LaunchAgents/com.css.digest-monthly.plist
+
+  See LOCAL_SETUP.md for the full walkthrough.
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.css.digest-monthly</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/bash</string>
+    <string>-c</string>
+    <string>cd /Users/tgoh/playground/css &amp;&amp; TSX_PATH scripts/run-digest.ts --period month --catch-up &gt;&gt; HOME_PATH/.local/state/css/digest.log 2&gt;&amp;1</string>
+  </array>
+
+  <key>EnvironmentVariables</key>
+  <dict/>
+
+  <key>RunAtLoad</key>
+  <true/>
+
+  <key>KeepAlive</key>
+  <false/>
+
+  <!-- 09:00 on the 1st of each month, local time. -->
+  <key>StartCalendarInterval</key>
+  <dict>
+    <key>Day</key>
+    <integer>1</integer>
+    <key>Hour</key>
+    <integer>9</integer>
+    <key>Minute</key>
+    <integer>0</integer>
+  </dict>
+
+  <key>StandardOutPath</key>
+  <string>HOME_PATH/.local/state/css/digest-monthly-stdout.log</string>
+
+  <key>StandardErrorPath</key>
+  <string>HOME_PATH/.local/state/css/digest-monthly-stderr.log</string>
+</dict>
+</plist>

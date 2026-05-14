@@ -5,7 +5,6 @@ const TABS = [
   { label: "Feed", href: "/feed" },
   { label: "Digests", href: "/digests" },
   { label: "Official", href: "/official" },
-  { label: "Watchlist", href: "/watchlist" },
   { label: "Competitors", href: "/competitors" },
   { label: "Analyst", href: "/analyst" },
   { label: "Saved", href: "/saved" },

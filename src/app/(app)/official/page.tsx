@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { FigChart, type ChartEvent } from "@/components/fig-chart";
 import { InsiderActivity } from "@/components/insider-activity";
-import { parseCount, sinceToDate } from "@/components/insider-filters";
+import { parseCount, sinceToDate } from "@/components/insider-filters-shared";
 import { ItemCard } from "@/components/item-card";
 import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";

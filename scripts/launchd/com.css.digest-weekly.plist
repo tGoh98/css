@@ -26,7 +26,12 @@
   </array>
 
   <key>EnvironmentVariables</key>
-  <dict/>
+  <dict>
+    <key>PATH</key>
+    <string>HOME_PATH/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+    <key>CLAUDE_BIN</key>
+    <string>HOME_PATH/.local/bin/claude</string>
+  </dict>
 
   <key>RunAtLoad</key>
   <true/>

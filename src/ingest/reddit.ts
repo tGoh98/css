@@ -1,13 +1,15 @@
 /**
  * Reddit search poller across the configured subreddits.
  *
- * Uses the unauthenticated `search.json` endpoint with `restrict_sr=on`.
- * Reddit aggressively blocks generic UAs and python-requests defaults, so
- * we always send a descriptive UA.
+ * Switched from `/search.json` to `/search.rss` after the JSON endpoint
+ * began returning 403 from Vercel's data-center IPs. RSS sometimes
+ * survives where JSON does not. If RSS also gets blocked we'll need
+ * to either move this ingest local (matching the digest worker
+ * pattern) or move to authenticated Reddit OAuth.
  */
+import Parser from "rss-parser";
 import {
   ensureSource,
-  fetchWith,
   insertAndClassify,
   markPolled,
   emptyResult,
@@ -39,24 +41,16 @@ const SUBREDDITS = [
 const MAX_ITEMS_PER_SUB = 10;
 const CLASSIFY_CONCURRENCY = 5;
 
-interface RedditListing {
-  data: {
-    children: Array<{
-      data: {
-        id: string;
-        name: string;
-        title: string;
-        selftext?: string;
-        author?: string;
-        permalink: string;
-        url: string;
-        created_utc: number;
-        subreddit: string;
-        score?: number;
-        num_comments?: number;
-      };
-    }>;
-  };
+interface RedditRssItem {
+  title?: string;
+  link?: string;
+  pubDate?: string;
+  isoDate?: string;
+  contentSnippet?: string;
+  content?: string;
+  guid?: string;
+  creator?: string;
+  author?: string;
 }
 
 export async function ingest(): Promise<IngestResult> {
@@ -66,15 +60,22 @@ export async function ingest(): Promise<IngestResult> {
     name: "Reddit search (Figma)",
     kind: "reddit",
     category: "core",
-    configJson: { subreddits: SUBREDDITS, query: "Figma" },
+    configJson: { subreddits: SUBREDDITS, query: "Figma", endpoint: "rss" },
+  });
+
+  const parser: Parser<unknown, RedditRssItem> = new Parser({
+    headers: {
+      "User-Agent":
+        "CSS-Aggregator/1.0 (by /u/tgoh98; contact timgoh98@gmail.com)",
+    },
+    timeout: 20_000,
   });
 
   for (const sub of SUBREDDITS) {
-    const url = `https://www.reddit.com/r/${sub}/search.json?q=Figma&sort=new&restrict_sr=on&limit=25`;
-    let listing: RedditListing;
+    const url = `https://www.reddit.com/r/${sub}/search.rss?q=Figma&restrict_sr=on&sort=new&limit=25`;
+    let feed;
     try {
-      const res = await fetchWith(url, {}, "CSS-Aggregator/1.0 (by /u/tgoh98; contact timgoh98@gmail.com)");
-      listing = (await res.json()) as RedditListing;
+      feed = await parser.parseURL(url);
     } catch (err) {
       result.errors.push(
         `reddit r/${sub}: ${err instanceof Error ? err.message : String(err)}`,
@@ -82,29 +83,32 @@ export async function ingest(): Promise<IngestResult> {
       continue;
     }
 
-    const children = (listing.data?.children ?? []).slice(0, MAX_ITEMS_PER_SUB);
-    for (let i = 0; i < children.length; i += CLASSIFY_CONCURRENCY) {
-      const batch = children.slice(i, i + CLASSIFY_CONCURRENCY);
+    const items = (feed.items as RedditRssItem[]).slice(0, MAX_ITEMS_PER_SUB);
+    for (let i = 0; i < items.length; i += CLASSIFY_CONCURRENCY) {
+      const batch = items.slice(i, i + CLASSIFY_CONCURRENCY);
       await Promise.allSettled(
-        batch.map(async (c) => {
-          const d = c.data;
-          const permalink = `https://www.reddit.com${d.permalink}`;
+        batch.map(async (entry) => {
+          if (!entry.title || !entry.link) return;
+          const externalId = entry.guid ?? entry.link;
+          const publishedAt = entry.isoDate
+            ? new Date(entry.isoDate)
+            : entry.pubDate
+              ? new Date(entry.pubDate)
+              : new Date();
           await insertAndClassify(
             sourceId,
             "Reddit search (Figma)",
             "reddit",
             {
-              externalId: d.name, // e.g. "t3_abc123" — globally unique on Reddit
-              url: permalink,
-              title: d.title,
-              snippet: (d.selftext ?? "").slice(0, 1500) || null,
-              author: d.author ?? null,
-              publishedAt: new Date(d.created_utc * 1000),
+              externalId,
+              url: entry.link,
+              title: entry.title,
+              snippet: entry.contentSnippet ?? null,
+              author: entry.creator ?? entry.author ?? null,
+              publishedAt,
               rawJson: {
-                subreddit: d.subreddit,
-                score: d.score ?? null,
-                num_comments: d.num_comments ?? null,
-                external_url: d.url,
+                subreddit: sub,
+                raw: entry as unknown as Record<string, unknown>,
               },
             },
             result,

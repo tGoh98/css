@@ -2,6 +2,8 @@ import { verifyCronSecret } from "@/lib/cron";
 import { ingest as ingestNews } from "@/ingest/news";
 import { ingest as ingestReddit } from "@/ingest/reddit";
 import { ingest as ingestHn } from "@/ingest/hn";
+import { notifyIngestSaturation } from "@/notify";
+import type { IngestResult } from "@/ingest/_shared";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
@@ -18,9 +20,22 @@ export async function GET(request: Request) {
     ingestHn(),
   ]);
 
-  const [news, reddit, hn] = results.map((r) =>
-    r.status === "fulfilled" ? r.value : { error: String(r.reason) },
-  );
+  const labeled = (["news", "reddit", "hn"] as const).map((label, i) => {
+    const r = results[i];
+    return {
+      label,
+      value:
+        r.status === "fulfilled"
+          ? r.value
+          : ({ inserted: 0, skipped: 0, errors: [String(r.reason)], warnings: [] } as IngestResult),
+    };
+  });
 
-  return Response.json({ ok: true, news, reddit, hn });
+  const warnings = labeled.flatMap(({ label, value }) =>
+    (value.warnings ?? []).map((w) => `[${label}] ${w}`),
+  );
+  if (warnings.length > 0) await notifyIngestSaturation("tick-15m", warnings);
+
+  const [news, reddit, hn] = labeled.map((l) => l.value);
+  return Response.json({ ok: true, news, reddit, hn, warnings });
 }

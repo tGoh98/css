@@ -67,17 +67,18 @@ async function pollGoogleNews(
   try {
     const feed = await parser.parseURL(GOOGLE_NEWS(query));
     const entries = (feed.items as RssItem[]).slice(0, MAX_ITEMS_PER_BRAND);
+    let newCount = 0;
     for (let i = 0; i < entries.length; i += PER_BRAND_CONCURRENCY) {
       const batch = entries.slice(i, i + PER_BRAND_CONCURRENCY);
-      await Promise.allSettled(
+      const outcomes = await Promise.allSettled(
         batch.map(async (entry) => {
-          if (!entry.title || !entry.link) return;
+          if (!entry.title || !entry.link) return "dedup" as const;
           const publishedAt = entry.isoDate
             ? new Date(entry.isoDate)
             : entry.pubDate
               ? new Date(entry.pubDate)
               : new Date();
-          await insertAndClassify(
+          return await insertAndClassify(
             sourceId,
             sourceName,
             "competitor-news",
@@ -92,6 +93,14 @@ async function pollGoogleNews(
             result,
           );
         }),
+      );
+      for (const r of outcomes) {
+        if (r.status === "fulfilled" && r.value !== "dedup") newCount += 1;
+      }
+    }
+    if (newCount >= MAX_ITEMS_PER_BRAND) {
+      result.warnings.push(
+        `${sourceName} (${brand}): SATURATED — all ${newCount}/${MAX_ITEMS_PER_BRAND} items new; older items may be lost`,
       );
     }
     await markPolled(sourceId);
@@ -116,17 +125,18 @@ async function pollRssBlog(
   try {
     const feed = await parser.parseURL(feedUrl);
     const entries = (feed.items as RssItem[]).slice(0, MAX_ITEMS_PER_BRAND);
+    let newCount = 0;
     for (let i = 0; i < entries.length; i += PER_BRAND_CONCURRENCY) {
       const batch = entries.slice(i, i + PER_BRAND_CONCURRENCY);
-      await Promise.allSettled(
+      const outcomes = await Promise.allSettled(
         batch.map(async (entry) => {
-          if (!entry.title || !entry.link) return;
+          if (!entry.title || !entry.link) return "dedup" as const;
           const publishedAt = entry.isoDate
             ? new Date(entry.isoDate)
             : entry.pubDate
               ? new Date(entry.pubDate)
               : new Date();
-          await insertAndClassify(
+          return await insertAndClassify(
             sourceId,
             sourceName,
             "competitor-blog",
@@ -142,6 +152,14 @@ async function pollRssBlog(
             result,
           );
         }),
+      );
+      for (const r of outcomes) {
+        if (r.status === "fulfilled" && r.value !== "dedup") newCount += 1;
+      }
+    }
+    if (newCount >= MAX_ITEMS_PER_BRAND) {
+      result.warnings.push(
+        `${sourceName} (${brand}): SATURATED — all ${newCount}/${MAX_ITEMS_PER_BRAND} items new; older posts may be lost`,
       );
     }
     await markPolled(sourceId);

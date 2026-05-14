@@ -120,11 +120,12 @@ export async function ingest(): Promise<IngestResult> {
   const MAX_POSTS_PER_TICK = 25;
   const CONCURRENCY = 6;
   const slice = candidates.slice(0, MAX_POSTS_PER_TICK);
+  let newCount = 0;
   for (let i = 0; i < slice.length; i += CONCURRENCY) {
     const batch = slice.slice(i, i + CONCURRENCY);
-    await Promise.allSettled(
+    const outcomes = await Promise.allSettled(
       batch.map(async (c) => {
-        await insertAndClassify(
+        return await insertAndClassify(
           sourceId,
           "Figma Blog",
           "blog",
@@ -140,6 +141,14 @@ export async function ingest(): Promise<IngestResult> {
           result,
         );
       }),
+    );
+    for (const r of outcomes) {
+      if (r.status === "fulfilled" && r.value !== "dedup") newCount += 1;
+    }
+  }
+  if (newCount >= MAX_POSTS_PER_TICK) {
+    result.warnings.push(
+      `figma-blog: SATURATED — all ${newCount}/${MAX_POSTS_PER_TICK} posts this tick were new; older posts on the index page may not have been examined`,
     );
   }
 

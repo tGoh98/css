@@ -99,21 +99,34 @@ export async function ingest(): Promise<IngestResult> {
     return result;
   }
 
-  // Cap + parallel so a fresh source row (or a backfill divergence) doesn't
-  // blow Vercel's 60s function cap. Already-inserted items dedup cheaply at
-  // the unique constraint and skip the classifier.
-  const MAX_FILINGS_PER_TICK = 25;
+  // Walk all of recent[] but skip already-ingested accessions BEFORE applying
+  // the safety cap. Previous version applied the cap first then dedup'd, so a
+  // fresh source row (or a 25-filing day) could permanently miss anything
+  // past position 25. Now the cap only bites genuine new-filing backlog.
+  // Cap exists to protect the 60s function budget — Form 4 XML fetch is the
+  // most expensive per-item work, and 50 of those still fits.
+  const SAFETY_CAP = 50;
   const CONCURRENCY = 6;
+
+  const existing = await db
+    .select({ externalId: items.externalId })
+    .from(items)
+    .where(eq(items.sourceId, sourceId));
+  const existingIds = new Set(existing.map((r) => r.externalId));
 
   const candidates: Array<{
     accession: string; form: string; url: string; indexUrl: string;
     filingDate: string; description: string; primary: string;
   }> = [];
+  let totalNewMatches = 0; // before truncation by SAFETY_CAP
   const n = recent.accessionNumber.length;
-  for (let i = 0; i < n && candidates.length < MAX_FILINGS_PER_TICK; i++) {
+  for (let i = 0; i < n; i++) {
     const form = recent.form[i];
     if (!KEPT_FORMS.has(form)) continue;
     const accession = recent.accessionNumber[i];
+    if (existingIds.has(accession)) continue;
+    totalNewMatches += 1;
+    if (candidates.length >= SAFETY_CAP) continue; // counted but not processed
     const accNoDash = accession.replace(/-/g, "");
     const primary = recent.primaryDocument[i] || `${accession}-index.htm`;
     candidates.push({
@@ -127,26 +140,20 @@ export async function ingest(): Promise<IngestResult> {
     });
   }
 
-  // Pre-filter dedup so we don't burn XML fetches on filings we've already
-  // ingested. The unique constraint inside insertAndClassify is still the
-  // source of truth for inserts.
-  const existing = candidates.length
-    ? await db
-        .select({ externalId: items.externalId })
-        .from(items)
-        .where(eq(items.sourceId, sourceId))
-    : [];
-  const existingIds = new Set(existing.map((r) => r.externalId));
+  if (totalNewMatches > SAFETY_CAP) {
+    result.warnings.push(
+      `sec: SATURATED — ${totalNewMatches} new EDGAR filings match KEPT_FORMS but only ${SAFETY_CAP} processed this tick; remaining ${totalNewMatches - SAFETY_CAP} will be picked up next tick (and re-dedup'd cheaply)`,
+    );
+  }
 
   for (let i = 0; i < candidates.length; i += CONCURRENCY) {
     const batch = candidates.slice(i, i + CONCURRENCY);
     await Promise.allSettled(
       batch.map(async (c) => {
-        const isNew = !existingIds.has(c.accession);
-        // For new Form 4s, fetch the XML and parse out insider details.
-        // Skipped on dedup to avoid hammering EDGAR every poll.
+        // candidates are pre-filtered against existingIds above, so every
+        // entry here is genuinely new. Form 4 XML fetch always runs.
         let form4Extra: Record<string, unknown> = {};
-        if (isNew && (c.form === "4" || c.form === "4/A")) {
+        if (c.form === "4" || c.form === "4/A") {
           const parsed = await fetchAndParseForm4(c.url, USER_AGENT);
           if (parsed) {
             form4Extra = {

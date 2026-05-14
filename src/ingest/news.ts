@@ -62,13 +62,14 @@ export async function ingest(): Promise<IngestResult> {
   const CONCURRENCY = 6;
   const entries = (feed.items as GoogleNewsItem[]).slice(0, MAX_ITEMS);
 
+  let newCount = 0;
   for (let i = 0; i < entries.length; i += CONCURRENCY) {
     const batch = entries.slice(i, i + CONCURRENCY);
-    await Promise.allSettled(
+    const outcomes = await Promise.allSettled(
       batch.map(async (entry) => {
         if (!entry.link || !entry.title) {
           result.errors.push("google-news: missing title/link");
-          return;
+          return "error" as const;
         }
         const externalId = entry.guid ?? entry.link;
         const publishedAt = entry.isoDate
@@ -82,7 +83,7 @@ export async function ingest(): Promise<IngestResult> {
             : (entry.source?._ ?? null);
         const snippet = entry.contentSnippet ?? entry.content ?? null;
 
-        await insertAndClassify(
+        return await insertAndClassify(
           sourceId,
           "Google News (Figma)",
           "news",
@@ -98,6 +99,18 @@ export async function ingest(): Promise<IngestResult> {
           result,
         );
       }),
+    );
+    for (const r of outcomes) {
+      if (r.status === "fulfilled" && r.value !== "dedup") newCount += 1;
+    }
+  }
+
+  // Saturation: every slot in our top-MAX_ITEMS window was a new item. Items
+  // past position MAX_ITEMS in the feed are at risk of being pushed out before
+  // we poll again. Surfaced via the route handler.
+  if (newCount >= MAX_ITEMS) {
+    result.warnings.push(
+      `google-news: SATURATED — all ${newCount}/${MAX_ITEMS} items this tick were new; older items may be lost`,
     );
   }
 

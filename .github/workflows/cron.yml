@@ -50,9 +50,20 @@ jobs:
           fi
           URL="https://css-lake-three.vercel.app/api/cron/${{ matrix.endpoint }}"
           echo "Hitting $URL"
-          curl -fsS --max-time 90 \
+          RESPONSE=$(curl -fsS --max-time 90 \
             -H "Authorization: Bearer $CRON_SECRET" \
-            "$URL"
+            "$URL")
+          echo "$RESPONSE"
+          # Fail the step (which fails the workflow → email on failure) if the
+          # ingest reported saturation. Resend email is the richer notification;
+          # this GH-Actions failure is the catch-all so we never miss a signal
+          # even if Resend/notification path is broken.
+          WARNINGS=$(echo "$RESPONSE" | jq -r '.warnings // [] | join("\n")')
+          if [ -n "$WARNINGS" ]; then
+            echo "::error::Ingest saturation in ${{ matrix.endpoint }}:"
+            echo "$WARNINGS" | sed 's/^/::error::  /'
+            exit 1
+          fi
 
   poke-hourly:
     if: |
@@ -76,6 +87,17 @@ jobs:
           fi
           URL="https://css-lake-three.vercel.app/api/cron/${{ matrix.endpoint }}"
           echo "Hitting $URL"
-          curl -fsS --max-time 90 \
+          RESPONSE=$(curl -fsS --max-time 90 \
             -H "Authorization: Bearer $CRON_SECRET" \
-            "$URL"
+            "$URL")
+          echo "$RESPONSE"
+          # Fail the step (which fails the workflow → email on failure) if the
+          # ingest reported saturation. Resend email is the richer notification;
+          # this GH-Actions failure is the catch-all so we never miss a signal
+          # even if Resend/notification path is broken.
+          WARNINGS=$(echo "$RESPONSE" | jq -r '.warnings // [] | join("\n")')
+          if [ -n "$WARNINGS" ]; then
+            echo "::error::Ingest saturation in ${{ matrix.endpoint }}:"
+            echo "$WARNINGS" | sed 's/^/::error::  /'
+            exit 1
+          fi

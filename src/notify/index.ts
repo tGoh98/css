@@ -256,6 +256,77 @@ export async function notifyBreaking(itemId: string | number): Promise<void> {
 }
 
 /**
+ * Notify enabled email channels that one or more ingest sources hit their
+ * per-tick saturation cap — older items in the upstream feed were likely not
+ * fetched. Fire-and-forget; never throws. No per-tick dedup; the route handler
+ * already aggregates warnings into a single call.
+ */
+export async function notifyIngestSaturation(
+  source: string,
+  warnings: string[],
+): Promise<void> {
+  if (warnings.length === 0) return;
+  try {
+    const channels = await enabledEmailChannels();
+    if (channels.length === 0) {
+      console.log(`[notify] saturation in ${source}: no enabled email channels`);
+      return;
+    }
+
+    const resend = resendClient();
+    const subject = `[CSS Saturation] ${source} — ${warnings.length} source(s) at cap`;
+    const text = `Ingest tick "${source}" reported saturation. Older items in one or more upstream feeds were not fetched this tick.\n\n${warnings.map((w) => `- ${w}`).join("\n")}\n\nThis usually means a news spike (e.g. earnings) pushed items past the per-tick cap. Items may be lost if the next tick can't catch up before the feed shifts further. Consider running a manual catch-up via /api/cron/ingest/<source> or raising MAX_ITEMS_*.\n`;
+    const html = `
+      <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; line-height: 1.5;">
+        <p style="margin: 0 0 12px;">
+          <span style="display:inline-block; padding:2px 8px; border-radius:4px; background:#fef3c7; color:#92400e; font-size:11px; font-weight:600; text-transform:uppercase; letter-spacing:0.05em;">Saturation</span>
+          <span style="margin-left:8px; padding:2px 8px; border-radius:4px; background:#eef2ff; color:#3730a3; font-size:11px; font-weight:600;">${escapeHtml(source)}</span>
+        </p>
+        <p style="margin: 0 0 12px;">Older items in one or more upstream feeds were not fetched this tick.</p>
+        <ul style="margin: 0 0 12px; padding-left: 20px;">
+          ${warnings.map((w) => `<li style="margin-bottom:4px;">${escapeHtml(w)}</li>`).join("")}
+        </ul>
+        <p style="margin: 0; color:#6b7280; font-size:13px;">
+          Likely a news spike (e.g. earnings) pushed items past the per-tick cap.
+          Items may be lost if the next tick can't catch up before the feed shifts further.
+        </p>
+      </div>
+    `;
+
+    for (const channel of channels) {
+      try {
+        if (resend) {
+          const sent = await resend.emails.send({
+            from: fromAddress(),
+            to: channel.to,
+            subject,
+            html,
+            text,
+          });
+          if (sent.error) {
+            console.error(
+              `[notify] saturation send failed for channel ${channel.id}:`,
+              sent.error,
+            );
+          }
+        } else {
+          console.log(
+            `[notify] (dry-run, no key) would send saturation to ${channel.to}: ${subject}`,
+          );
+        }
+      } catch (innerErr) {
+        console.error(
+          `[notify] failed to notify channel ${channel.id} (saturation):`,
+          innerErr,
+        );
+      }
+    }
+  } catch (err) {
+    console.error(`[notify] notifyIngestSaturation(${source}) failed:`, err);
+  }
+}
+
+/**
  * Notify enabled email channels about a newly-published digest. Does not
  * deduplicate per-channel (digests are intentionally re-sent if the worker
  * regenerates them); the caller controls invocation cadence.

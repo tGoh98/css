@@ -13,10 +13,29 @@ export interface IngestResult {
   inserted: number;
   skipped: number;
   errors: string[];
+  /**
+   * Per-tick saturation signals. A warning means the ingest hit its per-tick
+   * item cap with all-new items, i.e. older items in the upstream feed were
+   * not examined and are at risk of being lost as the feed shifts. The route
+   * handler surfaces these to GH Actions (fails the step) and to Resend.
+   */
+  warnings: string[];
 }
 
+/**
+ * Outcome of inserting one item. Lets each ingest count how many items were
+ * truly new vs. already-deduped — the signal we use to detect saturation.
+ *  - 'new'     row inserted + classified
+ *  - 'dropped' row inserted, classifier deleted it (low relevance) — still
+ *              counts as "new from the feed's perspective" for saturation
+ *  - 'error'   row inserted but classifier errored — same as 'dropped' for
+ *              saturation accounting (the slot was consumed by a fresh item)
+ *  - 'dedup'   row already existed; classifier was not called
+ */
+export type InsertOutcome = "new" | "dropped" | "error" | "dedup";
+
 export function emptyResult(): IngestResult {
-  return { inserted: 0, skipped: 0, errors: [] };
+  return { inserted: 0, skipped: 0, errors: [], warnings: [] };
 }
 
 export interface SourceKey {
@@ -80,7 +99,7 @@ export async function insertAndClassify(
   sourceKind: string,
   item: NewItem,
   result: IngestResult,
-): Promise<void> {
+): Promise<InsertOutcome> {
   try {
     const inserted = await db
       .insert(items)
@@ -101,7 +120,7 @@ export async function insertAndClassify(
 
     if (inserted.length === 0) {
       result.skipped += 1;
-      return;
+      return "dedup";
     }
 
     const itemId = inserted[0].id;
@@ -116,19 +135,23 @@ export async function insertAndClassify(
 
     if (classification.kind === "classified") {
       result.inserted += 1;
+      return "new";
     } else if (classification.kind === "dropped") {
       // Low-relevance items are deleted by the classifier; count as skipped.
       result.skipped += 1;
+      return "dropped";
     } else {
       result.errors.push(`classify item ${itemId}: ${classification.error}`);
       // Still count as inserted since the row exists; next run won't re-insert
       // (external_id collides) and won't re-classify (row exists check).
       result.inserted += 1;
+      return "error";
     }
   } catch (err) {
     result.errors.push(
       `insert ${item.externalId}: ${err instanceof Error ? err.message : String(err)}`,
     );
+    return "error";
   }
 }
 

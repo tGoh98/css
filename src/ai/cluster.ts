@@ -11,12 +11,27 @@
  * case unclustered items.
  */
 import Anthropic from "@anthropic-ai/sdk";
-import { and, eq, gte, inArray, isNull, sql } from "drizzle-orm";
+import { and, eq, gte, inArray, isNull, not, sql } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "@/db";
-import { itemClassifications, itemClusters, items } from "@/db/schema";
+import { itemClassifications, itemClusters, items, sources } from "@/db/schema";
 
 export const CLUSTER_MODEL = "claude-haiku-4-5";
+
+/**
+ * Source kinds that come from /admin/upload. These are explicitly exempted
+ * from cluster grouping: when the user uploads a PDF they expect it to show
+ * as its own row in /feed regardless of whether a scraped news item covers
+ * the same event. Cluster grouping was hiding uploads behind the more recent
+ * news representative.
+ */
+const UPLOAD_SOURCE_KINDS = [
+  "analyst-report",
+  "transcript",
+  "presentation",
+  "report",
+  "upload",
+];
 
 const CLUSTER_SYSTEM = `You are the topic-clustering engine for a Figma-focused news aggregator.
 
@@ -107,7 +122,16 @@ export async function clusterRecent(): Promise<ClusterRunResult> {
     })
     .from(items)
     .leftJoin(itemClassifications, eq(itemClassifications.itemId, items.id))
-    .where(and(isNull(items.clusterId), gte(items.publishedAt, since)))
+    .innerJoin(sources, eq(sources.id, items.sourceId))
+    .where(
+      and(
+        isNull(items.clusterId),
+        gte(items.publishedAt, since),
+        // Exempt manual uploads from clustering — they should always show
+        // as their own row in /feed, never hidden behind a scraped item.
+        not(inArray(sources.kind, UPLOAD_SOURCE_KINDS)),
+      ),
+    )
     .limit(200);
 
   result.itemsConsidered = rows.length;

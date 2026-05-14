@@ -163,6 +163,19 @@ Indexes: `items(published_at desc)`, `items(source_id, published_at desc)`, `ite
 
 ## Operational notes
 
+### Figma IR site is Cloudflare-gated; relying on SEC 8-K (2026-05-13)
+
+**Investigated:** Whether a dedicated `ir-press` poller against `investor.figma.com` was worth building.
+
+**Findings:**
+- `investor.figma.com` is hosted on Q4 Inc. The site root (`/overview/default.aspx`) returns 200, but every press-release / news / SEC / events path returns a Cloudflare managed-challenge HTML interstitial regardless of UA or headers. No plain-`fetch()` client can reach the rendered content.
+- The Q4 JSON syndication endpoint `/feed/PressRelease.svc/GetPressReleaseList` is *not* Cloudflare-blocked (200 OK), but returns `{"GetPressReleaseListResult":[]}` for every `serviceDto` variant tried — including correct `Year` values pulled from `GetPressReleaseYearList` (which itself returns `[2026, 2025, 2024]`). The same empty result reproduces on a peer Q4 site (`investor.redditinc.com`), so Q4 has restricted that endpoint platform-wide; it isn't Figma-specific. Likely requires a domain-scoped service key that's only present in the JS bundle's runtime config.
+- Headless-browser scraping was rejected as over-engineering for a personal tool.
+
+**Decision:** Skip the `ir-press` poller. The existing SEC EDGAR ingest captures every material press release Figma files (as 8-Ks, usually within hours of the wire). The trade-off is latency — a few hours behind Business Wire — which is acceptable for v1.
+
+**If we change our minds later:** Figma distributes via Business Wire; `Figma site:businesswire.com` on Google News RSS returns the actual press releases and is parseable with the existing news-ingester pattern. That's the lowest-friction path back in.
+
 ### Reddit: data-center IP blocking (2026-05-14)
 
 **Symptom:** All `/r/<sub>/search.json` requests from the Vercel cron route returned `403 Blocked`, even though the same URLs returned 200 with the same User-Agent from local curl. Reddit aggressively filters anonymous traffic from data-center IP ranges (AWS / Vercel) regardless of UA.
@@ -265,6 +278,7 @@ One-shot script per source: `npm run backfill:<source>`. Marks items with `backf
 | 2026-05-13 | Drop Chat tab and on-demand per-item summaries | Chat + lazy summaries inherently want real-time API calls; not worth the spend for a personal tool. Search via Postgres FTS is sufficient. |
 | 2026-05-13 | Digests run via local Claude Code (Max plan), not API | Uses existing Max subscription instead of API spend; digests are batched/async and tolerate the laptop-on dependency (catch-up logic handles missed runs). Classifier + clustering stay on API for low latency. |
 | 2026-05-13 | Drop Voyage embeddings and `item_embeddings` table | No chat = no RAG = no embeddings needed. `pgvector` extension stays enabled on Neon for future use but is unused in v1. |
+| 2026-05-13 | No dedicated `ir-press` poller; rely on SEC 8-K | `investor.figma.com` is Cloudflare-gated; Q4 JSON syndication returns empty. SEC 8-K already captures every material press release with ~hours of latency. See operational note. |
 
 ## Open questions
 

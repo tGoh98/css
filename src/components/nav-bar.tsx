@@ -12,7 +12,10 @@ const PUBLIC_TABS = [
   { label: "About", href: "/about" },
 ] as const;
 
-const ADMIN_TABS = [{ label: "Admin", href: "/admin/competitors" }] as const;
+const ADMIN_TABS = [
+  { label: "Competitors", href: "/admin/competitors" },
+  { label: "Upload", href: "/admin/upload" },
+] as const;
 
 export async function NavBar() {
   const session = await auth();

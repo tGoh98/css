@@ -8,15 +8,21 @@ import { fetchYahooAnalyst, fetchYahooChart } from "@/lib/queries/yahoo";
 export const dynamic = "force-dynamic";
 
 export default async function AnalystPage() {
-  const [chart, snapshot, analystItems] = await Promise.all([
+  const [chart, snapshot, seekingItems, reportItems] = await Promise.all([
     // 1 year of FIG closes — gives a better view of price-target evolution.
     fetchYahooChart("FIG", "1y", "1wk"),
     fetchYahooAnalyst("FIG"),
-    // We don't have a canonical "analyst" source `kind`. Best-effort match by
-    // either source.kind === 'analyst' OR source.name ILIKE '%analyst%' /
-    // '%seeking%'. Done via the brand filter (case-insensitive substring).
+    // Seeking Alpha items come in via the analyst poller (kind='news'); match
+    // by source.name. Uploaded analyst PDFs are kind='analyst-report'.
+    // Two queries + merge keeps fetchFeed's filter API simple (single brand,
+    // not OR-by-kind-or-name).
     fetchFeed({ brand: "seeking" }, { limit: 30, groupByCluster: false }),
+    fetchFeed({ kinds: ["analyst-report"] }, { limit: 30, groupByCluster: false }),
   ]);
+
+  const analystItems = [...seekingItems, ...reportItems]
+    .sort((a, b) => b.item.publishedAt.getTime() - a.item.publishedAt.getTime())
+    .slice(0, 30);
 
   const events: ChartEvent[] = analystItems.map((fi) => ({
     t: fi.item.publishedAt.getTime(),

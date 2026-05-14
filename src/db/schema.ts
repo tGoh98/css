@@ -21,7 +21,7 @@ import type { AdapterAccountType } from "next-auth/adapters";
 export const sources = pgTable("sources", {
   id: serial("id").primaryKey(),
   name: text("name").notNull(),
-  kind: text("kind").notNull(), // 'news'|'sec'|'blog'|'reddit'|'hn'|'competitor-news'|'competitor-blog'
+  kind: text("kind").notNull(), // 'news'|'sec'|'blog'|'reddit'|'hn'|'competitor-news'|'competitor-blog'|'analyst-report'|'transcript'|'presentation'|'report'|'upload'
   category: text("category").notNull(), // 'core'|'competitor'
   configJson: jsonb("config_json").$type<Record<string, unknown>>().default({}).notNull(),
   enabled: boolean("enabled").default(true).notNull(),

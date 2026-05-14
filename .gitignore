@@ -42,3 +42,4 @@ coverage/
 .nuxt/
 .turbo/
 .claude/
+.vercel

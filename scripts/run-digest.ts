@@ -805,18 +805,20 @@ async function main(): Promise<void> {
   if (failed > 0 && written === 0) {
     try {
       const notifyMod = await import(resolve(REPO_ROOT, "src/notify/index.ts"));
-      await notifyMod.notifyDigestFailure({
+      const { sent, channels } = await notifyMod.notifyDigestFailure({
         period: args.period,
         totalRanges: ranges.length,
         failedRanges: failed,
         sampleError: firstError,
       });
       log({
-        level: "info",
-        event: "failure_alert_sent",
+        level: sent > 0 ? "info" : "warn",
+        event: sent > 0 ? "failure_alert_sent" : "failure_alert_no_recipients",
         period: args.period,
         failed,
         total: ranges.length,
+        channels,
+        sent,
       });
     } catch (err) {
       log({

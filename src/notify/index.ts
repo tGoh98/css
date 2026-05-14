@@ -154,6 +154,29 @@ async function enabledEmailChannels(): Promise<EmailChannel[]> {
   return channels;
 }
 
+/**
+ * Channel lookup with a DB-outage fallback. The most common digest-failure
+ * mode is "DB unreachable" — so the alert can't depend on the same DB to
+ * find recipients. If the DB lookup throws, fall back to RESEND_TO_EMAIL.
+ * Used only by failure-path notifiers; success-path ones (notifyBreaking,
+ * notifyDigest) keep using enabledEmailChannels directly because they run
+ * from the Vercel function context where the DB is reliable.
+ */
+async function emailChannelsForAlert(): Promise<EmailChannel[]> {
+  try {
+    const fromDb = await enabledEmailChannels();
+    if (fromDb.length > 0) return fromDb;
+  } catch (err) {
+    console.warn(
+      "[notify] DB channel lookup failed; falling back to RESEND_TO_EMAIL:",
+      err instanceof Error ? err.message : String(err),
+    );
+  }
+  const envTo = fallbackTo();
+  if (envTo) return [{ id: -1, to: envTo }];
+  return [];
+}
+
 async function alreadySent(itemId: number, channelId: number): Promise<boolean> {
   const rows = await db
     .select({ itemId: notificationsSent.itemId })
@@ -331,18 +354,26 @@ export async function notifyIngestSaturation(
  * new digests — every attempted range errored. Fire-and-forget; never throws.
  * Called from `scripts/run-digest.ts` at end-of-run when failed > 0 AND
  * written == 0.
+ *
+ * Uses emailChannelsForAlert() (with env fallback) because the most common
+ * digest-failure cause is DB unreachability — the alert can't depend on the
+ * same DB it's reporting failure for.
+ *
+ * Returns {sent, channels} so the caller can log truthfully (the worker
+ * previously logged `failure_alert_sent` even when this function silently
+ * caught and ate every send error).
  */
 export async function notifyDigestFailure(args: {
   period: "day" | "week" | "month";
   totalRanges: number;
   failedRanges: number;
   sampleError: string | null;
-}): Promise<void> {
+}): Promise<{ sent: number; channels: number }> {
   try {
-    const channels = await enabledEmailChannels();
+    const channels = await emailChannelsForAlert();
     if (channels.length === 0) {
       console.log(`[notify] digest-failure (${args.period}): no enabled email channels`);
-      return;
+      return { sent: 0, channels: 0 };
     }
 
     const resend = resendClient();
@@ -373,6 +404,7 @@ export async function notifyDigestFailure(args: {
       </div>
     `;
 
+    let sent = 0;
     for (const channel of channels) {
       try {
         if (resend) {
@@ -388,11 +420,17 @@ export async function notifyDigestFailure(args: {
               `[notify] digest-failure send failed for channel ${channel.id}:`,
               result.error,
             );
+          } else {
+            sent += 1;
           }
         } else {
           console.log(
             `[notify] (dry-run, no key) would send digest-failure to ${channel.to}: ${subject}`,
           );
+          // Count dry-run as "sent" from the worker's perspective so the
+          // caller logs a successful path; the missing-key warning is
+          // already on the console line above.
+          sent += 1;
         }
       } catch (innerErr) {
         console.error(
@@ -401,8 +439,10 @@ export async function notifyDigestFailure(args: {
         );
       }
     }
+    return { sent, channels: channels.length };
   } catch (err) {
     console.error(`[notify] notifyDigestFailure(${args.period}) failed:`, err);
+    return { sent: 0, channels: 0 };
   }
 }
 

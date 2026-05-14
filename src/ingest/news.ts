@@ -58,7 +58,11 @@ export async function ingest(): Promise<IngestResult> {
   // Cap per-cycle work and parallelize the classifier calls. Items beyond
   // MAX_ITEMS are the older ones and will be ingested in subsequent ticks
   // as the feed shifts.
-  const MAX_ITEMS = 30;
+  //
+  // EARNINGS WINDOW (2026-05-14 → 2026-05-16): bumped 30 → 60 to catch the
+  // press-release spike. At CONCURRENCY=6 and ~1s/classify, 60 items takes
+  // ~10s — comfortable under the 60s function cap. REVERT to 30 after.
+  const MAX_ITEMS = 60;
   const CONCURRENCY = 6;
   const entries = (feed.items as GoogleNewsItem[]).slice(0, MAX_ITEMS);
 

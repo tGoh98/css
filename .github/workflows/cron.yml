@@ -9,7 +9,10 @@ name: Cron
 
 on:
   schedule:
-    - cron: '*/15 * * * *'   # 15m tick: news + reddit + hn
+    # EARNINGS WINDOW (2026-05-14 → 2026-05-16): bumped from */15 to */5 to
+    # catch the press-release news spike without blowing the per-tick item
+    # caps. REVERT to '*/15 * * * *' after 2026-05-16.
+    - cron: '*/5 * * * *'    # high-freq tick: news + reddit + hn
     - cron: '0 * * * *'      # hourly tick: figma-blog + sec + competitors + chart + cluster
   workflow_dispatch:
     inputs:
@@ -30,7 +33,7 @@ concurrency:
 jobs:
   poke-15m:
     if: |
-      (github.event_name == 'schedule' && github.event.schedule == '*/15 * * * *') ||
+      (github.event_name == 'schedule' && github.event.schedule == '*/5 * * * *') ||
       (github.event_name == 'workflow_dispatch' && inputs.tick == '15m')
     runs-on: ubuntu-latest
     timeout-minutes: 5

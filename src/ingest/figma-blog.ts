@@ -53,9 +53,12 @@ export async function ingest(): Promise<IngestResult> {
     publishedAt: Date | null;
   }> = [];
 
-  // Strategy: find anchor tags whose href looks like /blog/<slug>. Take the
-  // closest container as the card and extract a title + dek if possible.
-  $("a[href*='/blog/']").each((_, el) => {
+  // Strategy: find anchor tags whose href looks like /blog/<slug>, but ONLY
+  // inside the .blog-body main content region. The sidebar (.blog-nav) is
+  // full of single-word category links (/blog/events/, /blog/typography/,
+  // etc.) that look like posts but aren't — pre-2026-05-14 versions of this
+  // scraper pulled them all in.
+  $(".blog-body a[href*='/blog/']").each((_, el) => {
     const href = $(el).attr("href");
     if (!href) return;
     const abs = href.startsWith("http")

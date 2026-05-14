@@ -45,6 +45,8 @@ cat > ~/.config/css/digest.env <<'EOF'
 DATABASE_URL=postgres://...neon...   # same value as Vercel
 APP_URL=https://css-lake-three.vercel.app
 DIGEST_WEBHOOK_SECRET=<paste-the-same-value-set-in-Vercel>
+RESEND_API_KEY=<paste-the-same-value-set-in-Vercel>
+RESEND_TO_EMAIL=<recipient-email>
 EOF
 chmod 600 ~/.config/css/digest.env
 ```
@@ -54,18 +56,33 @@ Required keys:
 | Key | Purpose |
 |---|---|
 | `DATABASE_URL` | Neon connection string. Required. |
-| `APP_URL` | Base URL of the deployed web app. Used to ping the digest-published webhook so an email can be sent. |
+| `APP_URL` | Base URL of the deployed web app. Used to ping the digest-published webhook so a success email can be sent. |
 | `DIGEST_WEBHOOK_SECRET` | Shared secret with the Vercel `/api/webhooks/digest-published` route. Must match `DIGEST_WEBHOOK_SECRET` in Vercel env. |
+| `RESEND_API_KEY` | Used by `notifyDigestFailure` when the worker errors out — sends a `[CSS Digest] day worker failed` email directly (bypasses the Vercel webhook, since the most common failure mode is the DB being unreachable). |
+| `RESEND_TO_EMAIL` | Fallback recipient for the failure-alert email if the DB-driven `notification_channels` lookup fails (which it does when the DB is the thing that broke). |
 
 Optional:
 
 | Key | Default | Purpose |
 |---|---|---|
 | `CLAUDE_BIN` | `claude` | Override the Claude Code CLI binary path if it's not on the launchd `$PATH`. |
+| `RESEND_FROM_EMAIL` | `onboarding@resend.dev` | Override the From: address. |
 
 If `APP_URL` or `DIGEST_WEBHOOK_SECRET` is missing, the worker still writes
 the digest row but logs a `webhook_skipped` warning instead of pinging the
-webhook.
+webhook (so the success-path email won't fire).
+
+If `RESEND_API_KEY` is missing, the failure-alert path falls into dry-run
+mode — the worker logs `[notify] (dry-run, no key) would send digest-failure`
+instead of sending. **Both Resend keys are pulled from Vercel manually** —
+`vercel env pull` returns empty values for Vercel's Sensitive-marked vars,
+so copy them from the Vercel dashboard directly.
+
+The Vercel keys themselves are sourced from:
+- Vercel → Settings → Environment Variables → reveal each value → copy
+- All three (`DIGEST_WEBHOOK_SECRET`, `RESEND_API_KEY`, `RESEND_TO_EMAIL`)
+  must be set in Vercel production env first; they're shared between the
+  Vercel functions and the local worker.
 
 ---
 

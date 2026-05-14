@@ -121,6 +121,26 @@ export const itemNotes = pgTable("item_notes", {
   updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
 });
 
+/**
+ * Cached daily close prices keyed by (symbol, t). Populated by the chart
+ * ingester (hourly cron); the Official tab reads from here instead of
+ * hitting Yahoo at request time — Yahoo aggressively rate-limits Vercel.
+ */
+export const chartPoints = pgTable(
+  "chart_points",
+  {
+    symbol: text("symbol").notNull(),
+    t: timestamp("t", { withTimezone: true }).notNull(),
+    close: numeric("close", { precision: 12, scale: 4 }).notNull(),
+    currency: text("currency"),
+    fetchedAt: timestamp("fetched_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [
+    primaryKey({ columns: [table.symbol, table.t] }),
+    index("chart_points_symbol_t_idx").on(table.symbol, table.t.desc()),
+  ],
+);
+
 export const notificationChannels = pgTable("notification_channels", {
   id: serial("id").primaryKey(),
   kind: text("kind").notNull(), // 'email'|'slack'|'discord'

@@ -12,7 +12,11 @@
  * EDGAR REQUIRES a real, contactable User-Agent — anything missing/blank
  * is rate-limited or 403'd. We use the project-wide UA constant.
  */
-import { fetchWith, ensureSource, insertAndClassify, markPolled, emptyResult, type IngestResult } from "./_shared";
+import { eq } from "drizzle-orm";
+import { db } from "@/db";
+import { items } from "@/db/schema";
+import { fetchWith, ensureSource, insertAndClassify, markPolled, emptyResult, USER_AGENT, type IngestResult } from "./_shared";
+import { fetchAndParseForm4 } from "./sec-form4";
 
 const FIGMA_CIK_FALLBACK = "0001579878"; // discovered via EDGAR company search
 const KEPT_FORMS = new Set(["10-K", "10-Q", "8-K", "S-1", "S-1/A", "4", "4/A"]);
@@ -123,10 +127,42 @@ export async function ingest(): Promise<IngestResult> {
     });
   }
 
+  // Pre-filter dedup so we don't burn XML fetches on filings we've already
+  // ingested. The unique constraint inside insertAndClassify is still the
+  // source of truth for inserts.
+  const existing = candidates.length
+    ? await db
+        .select({ externalId: items.externalId })
+        .from(items)
+        .where(eq(items.sourceId, sourceId))
+    : [];
+  const existingIds = new Set(existing.map((r) => r.externalId));
+
   for (let i = 0; i < candidates.length; i += CONCURRENCY) {
     const batch = candidates.slice(i, i + CONCURRENCY);
     await Promise.allSettled(
       batch.map(async (c) => {
+        const isNew = !existingIds.has(c.accession);
+        // For new Form 4s, fetch the XML and parse out insider details.
+        // Skipped on dedup to avoid hammering EDGAR every poll.
+        let form4Extra: Record<string, unknown> = {};
+        if (isNew && (c.form === "4" || c.form === "4/A")) {
+          const parsed = await fetchAndParseForm4(c.url, USER_AGENT);
+          if (parsed) {
+            form4Extra = {
+              reporter_name: parsed.reporter_name,
+              reporter_role: parsed.reporter_role,
+              is_director: parsed.is_director,
+              is_officer: parsed.is_officer,
+              is_ten_percent_owner: parsed.is_ten_percent_owner,
+              transaction_code: parsed.transactions[0]?.code ?? null,
+              transaction: parsed.direction,
+              shares: parsed.net_shares,
+              value: parsed.total_value,
+              transactions: parsed.transactions,
+            };
+          }
+        }
         await insertAndClassify(
           sourceId,
           "SEC EDGAR (Figma)",
@@ -135,7 +171,9 @@ export async function ingest(): Promise<IngestResult> {
             externalId: c.accession,
             url: c.url,
             title: `${c.form} — ${c.description || submissions.name}`,
-            snippet: `Form ${c.form} filed ${c.filingDate} by ${submissions.name}.`,
+            snippet: form4Extra.reporter_name
+              ? `Form ${c.form} filed ${c.filingDate}: ${form4Extra.reporter_name}${form4Extra.reporter_role ? ` (${form4Extra.reporter_role})` : ""}.`
+              : `Form ${c.form} filed ${c.filingDate} by ${submissions.name}.`,
             publishedAt: new Date(`${c.filingDate}T00:00:00Z`),
             rawJson: {
               filing_type: c.form,
@@ -144,6 +182,7 @@ export async function ingest(): Promise<IngestResult> {
               primary_document: c.primary,
               index_url: c.indexUrl,
               cik,
+              ...form4Extra,
             },
           },
           result,

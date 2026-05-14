@@ -15,7 +15,8 @@
     "backfill:hn": "tsx --env-file=.env.local scripts/backfill/hn.ts",
     "backfill:figma-blog": "tsx --env-file=.env.local scripts/backfill/figma-blog.ts",
     "backfill:reddit": "tsx --env-file=.env.local scripts/backfill/reddit.ts",
-    "backfill:competitors": "tsx --env-file=.env.local scripts/backfill/competitors.ts"
+    "backfill:competitors": "tsx --env-file=.env.local scripts/backfill/competitors.ts",
+    "backfill:sec-form4-enrich": "tsx --env-file=.env.local scripts/backfill/sec-form4-enrich.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "0.96.0",

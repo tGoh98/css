@@ -11,6 +11,7 @@
  * company-search JSON endpoint. CLI flag `--cik` overrides both.
  */
 
+import { fetchAndParseForm4 } from "@/ingest/sec-form4";
 import {
   classifyAndStore,
   ensureSource,
@@ -135,8 +136,29 @@ async function main(): Promise<void> {
       const filingDate = bucket.filingDate[i];
       const primaryDoc = bucket.primaryDocument[i];
       const url = filingUrl(cik, accession, primaryDoc);
+      let form4Extra: Record<string, unknown> = {};
+      if (form === "4" || form === "4/A") {
+        const parsed = await fetchAndParseForm4(url, USER_AGENT);
+        await sleep(120); // SEC ≤10 req/s; stay well under
+        if (parsed) {
+          form4Extra = {
+            reporter_name: parsed.reporter_name,
+            reporter_role: parsed.reporter_role,
+            is_director: parsed.is_director,
+            is_officer: parsed.is_officer,
+            is_ten_percent_owner: parsed.is_ten_percent_owner,
+            transaction_code: parsed.transactions[0]?.code ?? null,
+            transaction: parsed.direction,
+            shares: parsed.net_shares,
+            value: parsed.total_value,
+            transactions: parsed.transactions,
+          };
+        }
+      }
       const title = `${form} – Figma (${filingDate})`;
-      const snippet = `SEC ${form} filing, accession ${accession}, filed ${filingDate}.`;
+      const snippet = form4Extra.reporter_name
+        ? `SEC ${form} filing, ${form4Extra.reporter_name}${form4Extra.reporter_role ? ` (${form4Extra.reporter_role})` : ""}, filed ${filingDate}.`
+        : `SEC ${form} filing, accession ${accession}, filed ${filingDate}.`;
       const itemId = await insertBackfilledItem({
         sourceId,
         externalId: accession,
@@ -144,7 +166,14 @@ async function main(): Promise<void> {
         title,
         snippet,
         publishedAt: new Date(`${filingDate}T00:00:00Z`),
-        rawJson: { form, accession, filingDate, primaryDoc, cik },
+        rawJson: {
+          filing_type: form,
+          accession,
+          filing_date: filingDate,
+          primary_document: primaryDoc,
+          cik,
+          ...form4Extra,
+        },
       });
       if (itemId) {
         await classifyAndStore({

@@ -50,10 +50,6 @@ export default function AboutPage() {
               AI challengers (Google Stitch, Pencil, Galileo AI, Uizard,
               Anthropic&apos;s Claude design)
             </li>
-            <li>
-              <strong>Yahoo Finance &amp; Seeking Alpha</strong> — analyst
-              ratings, price targets
-            </li>
           </ul>
         </CardContent>
       </Card>
@@ -65,7 +61,7 @@ export default function AboutPage() {
         <CardContent className="text-sm leading-relaxed text-foreground/90 space-y-3">
           <p>
             <strong>Ingestion</strong> runs every 15 minutes (news, Reddit, HN)
-            or hourly (SEC, Figma blog, competitors, analyst) via GitHub
+            or hourly (SEC, Figma blog, competitors) via GitHub
             Actions cron. New items get a single Claude Haiku call for
             relevance + priority.
           </p>
@@ -109,9 +105,6 @@ export default function AboutPage() {
             <li>
               <strong>Competitors</strong> — same shape as Feed but scoped to
               competing tools
-            </li>
-            <li>
-              <strong>Analyst</strong> — consensus ratings and analyst commentary
             </li>
           </ul>
         </CardContent>

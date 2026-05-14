@@ -241,6 +241,16 @@ interface DigestItem {
   publishedAt: Date;
 }
 
+interface InsiderTransaction {
+  date: string; // YYYY-MM-DD
+  reporter: string;
+  role: string | null;
+  direction: "purchase" | "sale" | "other";
+  shares: number;
+  value: number | null;
+  url: string;
+}
+
 const ITEM_CAP = 150;
 
 async function fetchItemsForPeriod(
@@ -300,7 +310,69 @@ async function fetchItemsForPeriod(
   }));
 }
 
-function buildPrompt(period: Period, range: PeriodRange, items: DigestItem[]): string {
+/**
+ * Pull Form 4 insider transactions enriched by the Form 4 XML parser. Returns
+ * one row per filing with the dominant direction (purchase/sale/other) and
+ * aggregate shares/value. Used to construct the prompt's investor preamble.
+ */
+async function fetchInsiderForPeriod(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  db: any,
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  schema: any,
+  range: PeriodRange,
+): Promise<InsiderTransaction[]> {
+  const { items, sources } = schema;
+  const drizzleOrm = await import("drizzle-orm");
+  const { and, eq, gte, lt, sql: dsql, desc } = drizzleOrm;
+
+  const rows = await db
+    .select({
+      url: items.url,
+      publishedAt: items.publishedAt,
+      raw: items.rawJson,
+    })
+    .from(items)
+    .innerJoin(sources, eq(sources.id, items.sourceId))
+    .where(
+      and(
+        eq(sources.kind, "sec"),
+        dsql`${items.rawJson}->>'filing_type' in ('4', '4/A')`,
+        gte(items.publishedAt, range.periodStart),
+        lt(items.publishedAt, range.periodEnd),
+      ),
+    )
+    .orderBy(desc(items.publishedAt));
+
+  return rows
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    .map((r: any): InsiderTransaction | null => {
+      const raw = (r.raw ?? {}) as Record<string, unknown>;
+      const reporter = (raw.reporter_name as string | undefined) ?? null;
+      const dir = raw.transaction;
+      const sharesRaw = typeof raw.shares === "number" ? raw.shares : Number(raw.shares);
+      const valueRaw = typeof raw.value === "number" ? raw.value : Number(raw.value);
+      if (!reporter || (dir !== "purchase" && dir !== "sale" && dir !== "other")) return null;
+      if (!Number.isFinite(sharesRaw) || sharesRaw === 0) return null;
+      return {
+        date: new Date(r.publishedAt).toISOString().slice(0, 10),
+        reporter,
+        role: (raw.reporter_role as string | undefined) ?? null,
+        direction: dir as "purchase" | "sale" | "other",
+        shares: Math.abs(sharesRaw),
+        value: Number.isFinite(valueRaw) ? valueRaw : null,
+        url: r.url,
+      };
+    })
+    .filter((x: InsiderTransaction | null): x is InsiderTransaction => x !== null);
+}
+
+function buildPrompt(
+  period: Period,
+  range: PeriodRange,
+  items: DigestItem[],
+  insider: InsiderTransaction[],
+): string {
   const grouped: Record<DigestItem["priority"], DigestItem[]> = {
     breaking: [],
     notable: [],
@@ -323,30 +395,50 @@ function buildPrompt(period: Period, range: PeriodRange, items: DigestItem[]): s
   }
   const itemsBlock = sections.length ? sections.join("\n\n") : "_(no qualifying items)_";
 
+  // Structured insider preamble — gives Opus concrete numbers to cite in the
+  // Investor highlights section. Aggregated by reporter so a single multi-row
+  // filing reads as one transaction.
+  const fmtUsd = (v: number | null) =>
+    v == null ? "—" : v >= 1_000_000 ? `$${(v / 1_000_000).toFixed(2)}M` : v >= 1_000 ? `$${(v / 1_000).toFixed(1)}k` : `$${v}`;
+  const insiderBlock = insider.length
+    ? insider
+        .map(
+          (t) =>
+            `- ${t.date} · ${t.reporter}${t.role ? ` (${t.role})` : ""} · ${t.direction} ${t.shares.toLocaleString()} sh · ${fmtUsd(t.value)} · ${t.url}`,
+        )
+        .join("\n")
+    : "_(no Form 4 filings this period)_";
+
   const periodLabel =
     period === "day" ? "daily" : period === "week" ? "weekly" : "monthly";
   const startStr = range.periodStart.toISOString().slice(0, 10);
   const endStr = new Date(range.periodEnd.getTime() - 1).toISOString().slice(0, 10);
 
   return [
-    `You are writing a ${periodLabel} digest about Figma (the company / FIG ticker) for a single technical reader.`,
-    `Period: ${startStr} → ${endStr} (UTC, end inclusive). Total items: ${items.length}.`,
+    `You are writing a ${periodLabel} digest about Figma (the company / FIG ticker) for a single technical reader who also tracks the stock as an investor.`,
+    `Period: ${startStr} → ${endStr} (UTC, end inclusive). Total items: ${items.length}. Form 4 filings: ${insider.length}.`,
     ``,
-    `Below are the items already classified for relevance and priority. Synthesize them — group related items, surface the actual story, name names, include numbers (share counts, prices, dates).`,
+    `Below are the items already classified for relevance and priority, plus a structured list of insider transactions parsed from Form 4 XML. Synthesize them — group related items, surface the actual story, name names, include numbers (share counts, prices, dates).`,
     ``,
-    `Output **Markdown only** with exactly these four H2 sections, in this order:`,
+    `Output **Markdown only** with exactly these five H2 sections, in this order:`,
     ``,
     `## Breaking`,
     `## Notable`,
+    `## Investor highlights`,
     `## Routine`,
     `## What to watch`,
     ``,
     `Rules:`,
     `- Each section is 1–6 short bullets. "Breaking" may be empty (write "_None._").`,
+    `- "Investor highlights" covers signal a FIG shareholder cares about: SEC filings (10-K/10-Q/8-K/S-1), insider buying/selling from Form 4s, material analyst rating changes, financial guidance, stock-affecting events. Cite specific share counts and dollar values from the Form 4 list below — do not round aggressively. If the period has nothing investor-relevant, write "_None._".`,
     `- "What to watch" forecasts the next ${periodLabel === "daily" ? "few days" : periodLabel === "weekly" ? "weeks" : "months"} based on what's in the items (no speculation beyond that).`,
     `- Cite items inline like [TechCrunch](url) — the URLs are already in the list below.`,
     `- Do NOT preface with "Here is the digest" or similar. Start directly with \`## Breaking\`.`,
-    `- Do NOT invent items or facts not present below.`,
+    `- Do NOT invent items, transactions, or facts not present below.`,
+    ``,
+    `Insider transactions (Form 4):`,
+    ``,
+    insiderBlock,
     ``,
     `Items:`,
     ``,
@@ -428,7 +520,13 @@ async function runClaudeText(prompt: string): Promise<string> {
 }
 
 function validateDigest(md: string): boolean {
-  const headings = ["## Breaking", "## Notable", "## Routine", "## What to watch"];
+  const headings = [
+    "## Breaking",
+    "## Notable",
+    "## Investor highlights",
+    "## Routine",
+    "## What to watch",
+  ];
   return headings.some((h) => md.includes(h));
 }
 
@@ -528,8 +626,11 @@ async function generateOne(
       return;
     }
 
-    const items = await fetchItemsForPeriod(db, schema, range);
-    if (items.length === 0) {
+    const [items, insider] = await Promise.all([
+      fetchItemsForPeriod(db, schema, range),
+      fetchInsiderForPeriod(db, schema, range),
+    ]);
+    if (items.length === 0 && insider.length === 0) {
       log({
         level: "info",
         event: "skip_no_items",
@@ -540,7 +641,7 @@ async function generateOne(
       return;
     }
 
-    const prompt = buildPrompt(period, range, items);
+    const prompt = buildPrompt(period, range, items, insider);
     const { text, modelLabel } = await invokeClaude(prompt);
 
     if (!validateDigest(text)) {

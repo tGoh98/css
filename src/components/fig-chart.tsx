@@ -1,4 +1,4 @@
-import type { ChartData } from "@/lib/queries/yahoo";
+import type { ChartData } from "@/lib/queries/chart";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 
 export type ChartEvent = {
@@ -31,10 +31,10 @@ export function FigChart({
       <Card>
         <CardHeader>
           <CardTitle>FIG</CardTitle>
-          <CardDescription>{caption ?? "Yahoo chart unavailable"}</CardDescription>
+          <CardDescription>{caption ?? "Chart unavailable"}</CardDescription>
         </CardHeader>
         <CardContent className="text-sm text-muted-foreground">
-          No chart data right now. Yahoo&apos;s free endpoint sometimes rate-limits — refresh in a minute.
+          No chart data yet — the hourly cron will populate this after the next run.
         </CardContent>
       </Card>
     );
@@ -98,7 +98,7 @@ export function FigChart({
                 {change.toFixed(2)} ({changePct >= 0 ? "+" : ""}
                 {changePct.toFixed(2)}%)
               </span>{" "}
-              · {data.range} · {caption ?? "Yahoo Finance"}
+              · {data.range} · {caption ?? "Daily close"}
             </CardDescription>
           </div>
           <Legend />

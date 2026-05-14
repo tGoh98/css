@@ -10,7 +10,7 @@ name: Cron
 on:
   schedule:
     - cron: '*/15 * * * *'   # 15m tick: news + reddit + hn
-    - cron: '0 * * * *'      # hourly tick: figma-blog + sec + competitors + analyst + cluster
+    - cron: '0 * * * *'      # hourly tick: figma-blog + sec + competitors + chart + cluster
   workflow_dispatch:
     inputs:
       tick:
@@ -63,7 +63,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        endpoint: [ingest/figma-blog, ingest/sec, ingest/competitors, ingest/analyst, cluster]
+        endpoint: [ingest/figma-blog, ingest/sec, ingest/competitors, ingest/chart, cluster]
     steps:
       - name: Poke ${{ matrix.endpoint }}
         env:

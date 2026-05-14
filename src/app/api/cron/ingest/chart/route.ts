@@ -1,5 +1,5 @@
 import { verifyCronSecret } from "@/lib/cron";
-import { ingest } from "@/ingest/analyst";
+import { ingest } from "@/ingest/chart";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;

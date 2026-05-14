@@ -15,10 +15,10 @@ export type InsiderTx = {
 };
 
 /**
- * Pulls recent Form 4 filings from items.raw_json. The ingest worker is
- * expected to populate raw_json with at least `filing_type`, and may include
- * reporter name/role, transaction code, shares, and value. We coerce safely
- * and tolerate missing fields.
+ * Pulls recent Form 4 filings. `raw_json.filing_type = '4'` is populated
+ * both by the live SEC ingester and by the normalized backfill. The
+ * Form 4 XML parser writes `reporter_name`, `reporter_role`, `transaction`,
+ * `shares`, and `value` directly — we read those fields verbatim.
  */
 export async function fetchRecentInsiderActivity(limit = 10): Promise<InsiderTx[]> {
   const rows = await db
@@ -35,7 +35,7 @@ export async function fetchRecentInsiderActivity(limit = 10): Promise<InsiderTx[
     .where(
       and(
         eq(sources.kind, "sec"),
-        sql`${items.rawJson}->>'filing_type' = '4'`,
+        sql`${items.rawJson}->>'filing_type' in ('4', '4/A')`,
       ),
     )
     .orderBy(desc(items.publishedAt))
@@ -43,13 +43,13 @@ export async function fetchRecentInsiderActivity(limit = 10): Promise<InsiderTx[
 
   return rows.map((r) => {
     const raw = (r.raw ?? {}) as Record<string, unknown>;
-    const shares = toNum(raw.shares ?? raw.transaction_shares);
-    const value = toNum(raw.value ?? raw.transaction_value ?? raw.total_value);
-    const txRaw = String(raw.transaction_code ?? raw.transaction ?? "").toUpperCase();
+    // Direction lives on `transaction`; show absolute share counts in the UI.
+    const sharesRaw = toNum(raw.shares);
+    const shares = sharesRaw == null ? null : Math.abs(sharesRaw);
+    const value = toNum(raw.value);
+    const t = raw.transaction;
     let transaction: InsiderTx["transaction"] = null;
-    if (txRaw === "P" || txRaw === "PURCHASE") transaction = "purchase";
-    else if (txRaw === "S" || txRaw === "SALE") transaction = "sale";
-    else if (txRaw) transaction = "other";
+    if (t === "purchase" || t === "sale" || t === "other") transaction = t;
 
     return {
       itemId: r.id,

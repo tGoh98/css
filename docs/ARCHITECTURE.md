@@ -144,11 +144,11 @@ Indexes: `items(published_at desc)`, `items(source_id, published_at desc)`, `ite
 
 | Source | API/feed | Polling | Backfill depth | Notes |
 |---|---|---|---|---|
-| Google News | RSS `news.google.com/rss/search?q=Figma` | 15 min | Recent only (~weeks) | Unofficial but reliable. Headlines + snippets across WSJ, Bloomberg, TechCrunch, The Verge, Barron's, etc. |
+| Google News | RSS `news.google.com/rss/search?q=Figma` | 5 min | Recent only (~weeks) | Unofficial but reliable. Headlines + snippets across WSJ, Bloomberg, TechCrunch, The Verge, Barron's, etc. |
 | SEC EDGAR | `data.sec.gov/submissions/CIK*.json` + filings index | hourly | Full history (since S-1, Apr 2025) | Free, no key. Pull 10-K, 10-Q, 8-K, S-1, Form 4. Form 4 powers Insider Activity widget. |
 | Figma blog | RSS at `figma.com/blog/feed/` (or equivalent) | hourly | Last ~20 via RSS; full archive via scrape | |
-| Reddit | `reddit.com/r/<sub>/search.rss?q=Figma&restrict_sr=on&sort=new` across r/FigmaDesign + design subs (UI_Design, userexperience, web_design, design) + financial subs (stocks, StockMarket, wallstreetbets, investing, ValueInvesting, SecurityAnalysis, IPO) | 15 min | Last ~few months via search | See **Reddit operational note** below — Pushshift dead. |
-| Hacker News | Algolia `hn.algolia.com/api/v1/search?query=Figma` | 15 min | Full history (years) | Free, no key. Best historical community-signal source. |
+| Reddit | `reddit.com/r/<sub>/search.rss?q=Figma&restrict_sr=on&sort=new` across r/FigmaDesign + design subs (UI_Design, userexperience, web_design, design) + financial subs (stocks, StockMarket, wallstreetbets, investing, ValueInvesting, SecurityAnalysis, IPO) | 5 min | Last ~few months via search | See **Reddit operational note** below — Pushshift dead. |
+| Hacker News | Algolia `hn.algolia.com/api/v1/search_by_date?query=Figma` with watermarked `numericFilters=created_at_i>...` | 5 min | Full history (years) | Free, no key. Paginates 4 × 50 hits on backlog so spikes self-heal. |
 
 ### Competitor
 
@@ -221,9 +221,9 @@ If we ever hit fallback step 1, also update this note + bump the commit referenc
 
 | Job | Cadence | Where | What |
 |---|---|---|---|
-| `ingest:news` | every 15 min | **GitHub Actions** cron | Google News RSS for Figma |
-| `ingest:reddit` | every 15 min | **GitHub Actions** cron | Reddit RSS across configured subs (see Reddit op note) |
-| `ingest:hn` | every 15 min | **GitHub Actions** cron | HN Algolia search |
+| `ingest:news` | every 5 min | **GitHub Actions** cron | Google News RSS for Figma |
+| `ingest:reddit` | every 5 min | **GitHub Actions** cron | Reddit RSS across configured subs (see Reddit op note) |
+| `ingest:hn` | every 5 min | **GitHub Actions** cron | HN Algolia search (watermark + paginate) |
 | `ingest:figma-blog` | hourly | **GitHub Actions** cron | Figma blog RSS |
 | `ingest:sec` | hourly | **GitHub Actions** cron | EDGAR for new Figma filings (with Form 4 XML enrichment) |
 | `ingest:competitors` | hourly | **GitHub Actions** cron | Adobe / Canva / Sketch / Penpot / AI challengers |
@@ -234,7 +234,9 @@ If we ever hit fallback step 1, also update this note + bump the commit referenc
 | `digest:weekly` | Mondays 09:00 | **launchd (user's Mac)** | Weekly digest |
 | `digest:monthly` | 1st of month 09:00 | **launchd (user's Mac)** | Monthly digest |
 
-Vercel Hobby caps cron at 2 daily-only jobs, so the ingest schedule lives in `.github/workflows/cron.yml` as two matrix jobs (`*/15 * * * *` and `0 * * * *`) that hit `/api/cron/ingest/*` with `Authorization: Bearer $CRON_SECRET`. The Vercel function handlers verify via `crypto.timingSafeEqual`. `vercel.json` still configures 2 daily cron entries as a fallback.
+Vercel Hobby caps cron at 2 daily-only jobs, so the ingest schedule lives in `.github/workflows/cron.yml` as two matrix jobs (`*/5 * * * *` and `0 * * * *`) that hit `/api/cron/ingest/*` with `Authorization: Bearer $CRON_SECRET`. The Vercel function handlers verify via `crypto.timingSafeEqual`. `vercel.json` still configures 2 daily cron entries as a fallback.
+
+Each ingest also tracks per-tick **saturation** — if its `MAX_ITEMS_*` cap fills with all-new items in a single tick, it pushes a warning into the response that fails the GH Actions step (catch-all email) and triggers a Resend "saturation" email. HN additionally watermarks the newest seen `published_at` and paginates Algolia until caught up (up to 4 × 50 hits), so a backlog from a news spike self-heals on the next tick.
 
 Local digest jobs use `StartCalendarInterval` + the script's catch-up logic so missed runs (Mac asleep, traveling, etc.) are picked up on next wake.
 
@@ -289,7 +291,8 @@ One-shot script per source: `npm run backfill:<source>`. Marks items with `backf
 | 2026-05-14 | Stock chart cached in `chart_points` table, refreshed hourly via GH Actions | Yahoo Finance aggressively rate-limits Vercel IPs (429 on every render). One hourly write from a rotating GH Actions runner is enough, and the page reads straight from Postgres. |
 | 2026-05-14 | Form 4 XML parsed at ingest, structured fields merged into `raw_json` | Insider Activity widget needs reporter/role/shares/value — title alone is useless. cheerio (already a dep) handles the XML; ≤10 req/s to EDGAR. |
 | 2026-05-14 | Digests get an `## Investor highlights` H2 with a structured Form 4 preamble | Opus can synthesize multi-row Form 4 events into a single narrative when given the parsed transactions as a flat list (date, reporter, role, direction, shares, value, url). Without the preamble it hallucinates numbers. |
-| 2026-05-14 | Switch ingest cron to GitHub Actions (was Vercel Cron) | Vercel Hobby caps cron at 2 daily-only entries. GH Actions matrix gives us per-source 15-min/hourly granularity for free. |
+| 2026-05-14 | Switch ingest cron to GitHub Actions (was Vercel Cron) | Vercel Hobby caps cron at 2 daily-only entries. GH Actions matrix gives us per-source sub-hourly/hourly granularity for free. |
+| 2026-05-14 | High-freq tick at `*/5`, news `MAX_ITEMS=60`, saturation alerts, HN watermark/paginate, SEC dedup-first walk, Reddit parallel-subs | Spike-day analysis showed the old `*/15` + 30-item cap could silently lose articles when coverage flooded (e.g. earnings). Tighter cadence + wider cap + per-tick saturation tripwire (GH Actions fail + Resend email) means we know when we're losing items, and HN/SEC self-heal on backlog. Reddit parallelization fixes a real 504 at the 60s function cap. No meaningful cost delta — classifier is per-new-item, not per-poll. |
 | 2026-05-14 | Public read-only site; only `/admin/*` is gated | Allowlist auth added friction with zero benefit — the data is already public elsewhere. GitHub sign-in stays for admin tools (competitor management). |
 | 2026-05-13 | Retention: keep everything forever | DB is small, archival is valuable for digests |
 | 2026-05-13 | Notifications: Resend (email only for v1) | 3k emails/mo free; lightweight setup; Slack/Discord can be added later |

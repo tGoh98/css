@@ -24,15 +24,27 @@ export interface IngestResult {
 
 /**
  * Outcome of inserting one item. Lets each ingest count how many items were
- * truly new vs. already-deduped — the signal we use to detect saturation.
- *  - 'new'     row inserted + classified
- *  - 'dropped' row inserted, classifier deleted it (low relevance) — still
- *              counts as "new from the feed's perspective" for saturation
- *  - 'error'   row inserted but classifier errored — same as 'dropped' for
- *              saturation accounting (the slot was consumed by a fresh item)
+ * truly new vs. already-deduped.
+ *  - 'new'     row inserted + classified, kept in DB
+ *  - 'dropped' row inserted, classifier deleted it as low-relevance
+ *              (the row no longer exists)
+ *  - 'error'   row inserted but classifier errored — row stays in DB
+ *              un-classified; may still be useful content
  *  - 'dedup'   row already existed; classifier was not called
  */
 export type InsertOutcome = "new" | "dropped" | "error" | "dedup";
+
+/**
+ * Whether an insert outcome counts toward the saturation alert. We only want
+ * to warn about lost items that *would have mattered* — i.e., items the
+ * classifier kept ('new') or couldn't decide on ('error'). Items the
+ * classifier dropped wouldn't have been kept regardless of cap, so a cap
+ * full of dropped items isn't a real signal of lost content (this is the
+ * "noisy competitor query" case, e.g. "Pencil" matching Apple Pencil etc.).
+ */
+export function countsForSaturation(outcome: InsertOutcome): boolean {
+  return outcome === "new" || outcome === "error";
+}
 
 export function emptyResult(): IngestResult {
   return { inserted: 0, skipped: 0, errors: [], warnings: [] };

@@ -13,6 +13,7 @@ import {
   insertAndClassify,
   markPolled,
   emptyResult,
+  countsForSaturation,
   type IngestResult,
 } from "./_shared";
 
@@ -123,7 +124,7 @@ export async function ingest(): Promise<IngestResult> {
         }),
       );
       for (const r of outcomes) {
-        if (r.status === "fulfilled" && r.value !== "dedup") newCount += 1;
+        if (r.status === "fulfilled" && countsForSaturation(r.value)) newCount += 1;
       }
     }
     if (newCount >= MAX_ITEMS_PER_SUB) {

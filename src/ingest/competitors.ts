@@ -20,6 +20,7 @@ import {
   insertAndClassify,
   markPolled,
   emptyResult,
+  countsForSaturation,
   USER_AGENT,
   type IngestResult,
 } from "./_shared";
@@ -95,7 +96,7 @@ async function pollGoogleNews(
         }),
       );
       for (const r of outcomes) {
-        if (r.status === "fulfilled" && r.value !== "dedup") newCount += 1;
+        if (r.status === "fulfilled" && countsForSaturation(r.value)) newCount += 1;
       }
     }
     if (newCount >= MAX_ITEMS_PER_BRAND) {
@@ -154,7 +155,7 @@ async function pollRssBlog(
         }),
       );
       for (const r of outcomes) {
-        if (r.status === "fulfilled" && r.value !== "dedup") newCount += 1;
+        if (r.status === "fulfilled" && countsForSaturation(r.value)) newCount += 1;
       }
     }
     if (newCount >= MAX_ITEMS_PER_BRAND) {

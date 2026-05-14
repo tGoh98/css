@@ -27,7 +27,7 @@ export async function NavBar() {
     <header className="border-b border-border bg-background">
       <div className="mx-auto flex max-w-6xl items-center gap-3 sm:gap-8 px-3 sm:px-6 py-3 sm:py-4">
         <Link
-          href="/feed"
+          href="/"
           className="shrink-0 text-sm font-semibold tracking-tight"
           aria-label="Claudy Simple Server"
         >

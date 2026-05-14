@@ -8,6 +8,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import { InsiderFilters } from "@/components/insider-filters";
 import type { InsiderTx } from "@/lib/queries/insider";
 
 function fmtShares(n: number | null): string {
@@ -22,17 +23,36 @@ function fmtUsd(n: number | null): string {
   return `$${n.toFixed(0)}`;
 }
 
-export function InsiderActivity({ rows }: { rows: InsiderTx[] }) {
+export function InsiderActivity({
+  rows,
+  total,
+  reporters,
+  hasActiveFilter,
+}: {
+  rows: InsiderTx[];
+  total: number;
+  reporters: string[];
+  hasActiveFilter: boolean;
+}) {
+  const description = rows.length === total
+    ? `${total} Form 4 filing${total === 1 ? "" : "s"} match`
+    : `Showing ${rows.length} of ${total} matching filings`;
+
   return (
     <Card>
-      <CardHeader>
-        <CardTitle className="text-base">Insider Activity</CardTitle>
-        <CardDescription>Recent Form 4 filings (last ~10)</CardDescription>
+      <CardHeader className="gap-3">
+        <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
+          <CardTitle className="text-base">Insider Activity</CardTitle>
+          <CardDescription className="text-xs">{description}</CardDescription>
+        </div>
+        <InsiderFilters reporters={reporters} hasActiveFilter={hasActiveFilter} />
       </CardHeader>
       <CardContent className="px-0">
         {rows.length === 0 ? (
           <div className="px-6 py-4 text-sm text-muted-foreground">
-            No Form 4 filings ingested yet.
+            {total === 0 && !hasActiveFilter
+              ? "No Form 4 filings ingested yet."
+              : "No Form 4 filings match the current filter."}
           </div>
         ) : (
           <div className="overflow-x-auto">

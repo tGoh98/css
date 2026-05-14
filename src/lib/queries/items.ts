@@ -28,6 +28,8 @@ export type FeedItem = {
 export type FeedFilter = {
   sourceId?: number;
   priority?: "routine" | "notable" | "breaking";
+  /** Match any of these priorities; takes precedence over `priority` when set. */
+  priorities?: ("routine" | "notable" | "breaking")[];
   since?: Date | null;
   /** Restrict to a category, e.g. 'competitor'. */
   category?: string;
@@ -59,7 +61,11 @@ const baseSelect = {
 function buildWhere(filter: FeedFilter) {
   const conds = [];
   if (filter.sourceId) conds.push(eq(items.sourceId, filter.sourceId));
-  if (filter.priority) conds.push(eq(itemClassifications.priority, filter.priority));
+  if (filter.priorities && filter.priorities.length > 0) {
+    conds.push(inArray(itemClassifications.priority, filter.priorities));
+  } else if (filter.priority) {
+    conds.push(eq(itemClassifications.priority, filter.priority));
+  }
   if (filter.since) conds.push(gte(items.publishedAt, filter.since));
   if (filter.category) conds.push(eq(sources.category, filter.category));
   if (filter.kinds && filter.kinds.length > 0) conds.push(inArray(sources.kind, filter.kinds));
@@ -185,4 +191,29 @@ export async function fetchItemById(id: number): Promise<FeedItem | null> {
 export async function searchItems(q: string, limit = 20): Promise<FeedItem[]> {
   if (!q.trim()) return [];
   return fetchFeed({ q }, { limit, groupByCluster: false });
+}
+
+/**
+ * Home-page "top items" — last N classified breaking/notable items within
+ * the given window, cluster-grouped so the same story doesn't repeat. Falls
+ * back to recent items of any priority when nothing escalates in-window —
+ * the dashboard should never look empty on a quiet day.
+ */
+export async function fetchTopRecentItems(opts: {
+  hours?: number;
+  limit?: number;
+}): Promise<FeedItem[]> {
+  const hours = opts.hours ?? 48;
+  const limit = opts.limit ?? 10;
+  const since = new Date(Date.now() - hours * 3600_000);
+
+  const top = await fetchFeed(
+    { priorities: ["breaking", "notable"], since },
+    { limit, groupByCluster: true },
+  );
+  if (top.length > 0) return top;
+
+  // Quiet-day fallback: just the most-recent classified items, any priority,
+  // any time. Keeps the home page useful even with zero notable signal.
+  return fetchFeed({}, { limit, groupByCluster: true });
 }

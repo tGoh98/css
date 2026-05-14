@@ -1,29 +1,48 @@
 import Link from "next/link";
 import { FigChart, type ChartEvent } from "@/components/fig-chart";
 import { InsiderActivity } from "@/components/insider-activity";
+import { parseCount, sinceToDate } from "@/components/insider-filters";
 import { ItemCard } from "@/components/item-card";
 import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
 import { fetchFeed } from "@/lib/queries/items";
-import { fetchRecentInsiderActivity } from "@/lib/queries/insider";
+import {
+  countInsiderActivity,
+  fetchInsiderActivity,
+  fetchInsiderReporters,
+} from "@/lib/queries/insider";
 import { fetchChart } from "@/lib/queries/chart";
 
 export const dynamic = "force-dynamic";
 
 const PAGE_SIZE = 25;
 
-type SearchParams = Promise<{ page?: string }>;
+type SearchParams = Promise<{
+  page?: string;
+  since?: string;
+  who?: string;
+  n?: string;
+}>;
 
 export default async function OfficialPage({ searchParams }: { searchParams: SearchParams }) {
   const sp = await searchParams;
   const page = Math.max(1, Number(sp.page) || 1);
   const offset = (page - 1) * PAGE_SIZE;
 
-  const [chart, insider, feedItems, eventItems] = await Promise.all([
+  const insiderFilter = {
+    since: sinceToDate(sp.since),
+    reporter: sp.who?.trim() || null,
+    limit: parseCount(sp.n),
+  };
+  const hasActiveFilter = Boolean(insiderFilter.since || insiderFilter.reporter || sp.n);
+
+  const [chart, insider, insiderTotal, reporters, feedItems, eventItems] = await Promise.all([
     // Fetch the widest range we offer; FigChart slices on the client when
     // the user switches range tabs, so this is one trip per page load.
     fetchChart("FIG", "5y"),
-    fetchRecentInsiderActivity(10),
+    fetchInsiderActivity(insiderFilter),
+    countInsiderActivity({ since: insiderFilter.since, reporter: insiderFilter.reporter }),
+    fetchInsiderReporters(),
     fetchFeed(
       { kinds: ["sec", "blog"] },
       { limit: PAGE_SIZE + 1, offset, groupByCluster: false },
@@ -63,7 +82,12 @@ export default async function OfficialPage({ searchParams }: { searchParams: Sea
 
       <FigChart data={chart} events={chartEvents} caption="Daily close" />
 
-      <InsiderActivity rows={insider} />
+      <InsiderActivity
+        rows={insider}
+        total={insiderTotal}
+        reporters={reporters}
+        hasActiveFilter={hasActiveFilter}
+      />
 
       <Separator />
 

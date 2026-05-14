@@ -358,7 +358,9 @@ function buildPrompt(period: Period, range: PeriodRange, items: DigestItem[]): s
 // Invoke claude --print.
 // ---------------------------------------------------------------------------
 
-const CLAUDE_MODEL = "claude-sonnet-4-6";
+// Opus on the Max plan since digests are batched (low call volume) and
+// quality matters more than speed. Costs the same Max-plan capacity.
+const CLAUDE_MODEL = "claude-opus-4-7";
 const CLAUDE_BIN = process.env.CLAUDE_BIN || "claude";
 
 interface ClaudeResult {

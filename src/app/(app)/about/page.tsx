@@ -18,15 +18,15 @@ export default function AboutPage() {
       >
         <div className="mb-2 flex items-center gap-2 text-base font-bold uppercase tracking-wide text-destructive">
           <span aria-hidden>⚠</span>
-          <span>Read this before trusting anything below</span>
+          <span>Read this before trusting anything on this site</span>
         </div>
         <ul className="list-disc space-y-2 pl-5 leading-relaxed">
           <li>
-            <strong>This is NOT investment advice.</strong> Nothing on this
-            site — feed cards, AI summaries, digests, the Analyst tab, the
-            chart, the insider widget, none of it — is a recommendation to
-            buy, sell, or hold any security. It&apos;s a personal news
-            aggregator for one person who happens to follow Figma.
+            <strong>This is NOT investment advice.</strong>
+            {" "}
+            Nothing on this site — feed cards, AI summaries, digests, the
+            Analyst tab, the chart, the insider widget, none of it — is a
+            recommendation to buy, sell, or hold any security.
           </li>
           <li>
             <strong>This site is vibe-coded.</strong> Built one prompt at a

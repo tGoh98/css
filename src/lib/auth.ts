@@ -18,7 +18,10 @@ export const authConfig = {
       clientSecret: process.env.AUTH_GITHUB_SECRET,
     }),
   ],
-  session: { strategy: "database" },
+  // JWT strategy — cookie is self-contained, so the Edge middleware in
+  // src/proxy.ts can validate sessions without a DB call. The DrizzleAdapter
+  // is still used to persist user + account rows; we just skip session rows.
+  session: { strategy: "jwt" },
   pages: {
     signIn: "/login",
     error: "/unauthorized",
@@ -33,9 +36,13 @@ export const authConfig = {
       if (!login) return false;
       return allowlist.includes(login.toLowerCase());
     },
-    async session({ session, user }) {
-      if (session.user && user) {
-        (session.user as { id?: string }).id = user.id;
+    async jwt({ token, user }) {
+      if (user) token.id = user.id;
+      return token;
+    },
+    async session({ session, token }) {
+      if (session.user && token?.id) {
+        (session.user as { id?: string }).id = token.id as string;
       }
       return session;
     },

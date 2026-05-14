@@ -20,46 +20,46 @@ Personal web app for aggregating, classifying, and summarizing Figma-related sig
 
 ### Tabs
 
-1. **Feed** — chronological list of every item across every source. Filterable by source, time range, and topic cluster. Full-text search pinned at the top.
-2. **Digests** — scheduled AI summaries (daily / weekly / monthly), with time-range filter.
-3. **Official** — SEC filings + Figma's own blog/press releases. FIG ticker chart pinned at top with news/filings overlaid as event markers. Dedicated **Insider Activity** widget summarizing recent Form 4 transactions (who, how many shares, at what price, cumulative-by-person).
-4. **Watchlist** — saved filters for specific people (Dylan Field, exec team) and topics ("AI features", "acquisitions"). Each watchlist gets its own filtered feed view.
-5. **Competitors** — Adobe, Canva, Sketch, Penpot. Same shape as Feed but scoped.
-6. **Analyst** — consensus ratings + price-target chart over time, rating-change events, Seeking Alpha free-tier articles. Note: full proprietary reports (Morningstar, Goldman, JPM) are paywalled behind Bloomberg/Refinitiv and not realistically scrapable.
+1. **Feed** — paginated chronological list of every item across every source. Filterable by source, priority, and time range. Full-text search via the ⌘K palette. Routine competitor chatter is suppressed by default (competitor sources must hit `notable+` to appear); core sources unaffected.
+2. **Digests** — scheduled AI summaries (daily / weekly / monthly), paginated newest-first. Each digest has five fixed H2 sections: `## Breaking`, `## Notable`, `## Investor highlights`, `## Routine`, `## What to watch`. The Investor highlights section is fed a structured Form 4 preamble so Opus can cite specific share counts / dollar values.
+3. **Official** — SEC filings + Figma's own blog/press releases (paginated). FIG ticker chart pinned at top with news/filings overlaid as event markers; range tabs (1W / 1M / 6M / 1Y / 5Y) slice the cached data client-side. Hover/tap a marker for date + source + classifier one-line + priority. Chart data is cached daily-close — disclaimer surfaces last poll time. **Insider Activity** widget below the chart summarizes the last ~10 Form 4s (reporter, role, direction, shares, dollar value).
+4. **Analyst** — Finnhub free-tier data for FIG: live quote + next-earnings card, current-month consensus with shift-vs-prior-month annotation, 24-month stacked recommendation trend, and earnings beat/miss surprise table. Premium Finnhub endpoints (per-analyst upgrade/downgrade history, price-target detail, estimate revisions) are paywalled and intentionally out of scope.
+5. **Competitors** — Adobe, Canva, Sketch, Penpot, plus AI design challengers. Same shape as Feed but scoped.
+6. **About** — what CSS is, where signal comes from, how the AI works, plus a prominent "not investment advice / vibe-coded / hallucinations possible" disclaimer.
 
 ### Cross-cutting
 
-- **Search** — `Cmd-K` palette plus a search bar on Feed. Postgres full-text search over title + snippet + full_text + classifier `one_line`.
-- **Bookmarks & notes** — every item has a bookmark toggle and a freeform notes field. "Saved" view collects bookmarked items across tabs.
-- **Topic clustering / dedup** — items grouped by Haiku into clusters; the Feed collapses N near-duplicates into a single card with a count + "see all".
-- **Push notifications** — email via Resend for breaking items. Default off, opt-in.
+- **Public read-only site, admin-gated writes.** All content tabs are public; only `/admin/*` requires GitHub sign-in (`AUTH_ADMIN` env or first entry of `AUTH_ALLOWLIST`). Server actions are wrapped in `requireAdmin()` as defense in depth.
+- **Search** — ⌘K palette + a search bar on Feed. Postgres full-text search over title + snippet + full_text + classifier `one_line`. Public endpoint, 200-char query cap.
+- **Topic clustering / dedup** — items grouped by Haiku into clusters; the Feed collapses N near-duplicates into a single card with a "+N similar" badge.
+- **Push notifications** — email via Resend. `notifyBreaking()` fires on insert of priority=breaking (skipping `backfilled=true` items so historical loads don't page). `notifyDigest()` fires from the digest webhook after each new `digests` row.
 
 ### Per-item behavior
 
-- Title, source badge, published date, classifier `one_line` (one-sentence AI blurb generated at ingest), priority badge (breaking/notable/routine), bookmark toggle
-- Click → detail view with the full snippet/text (no on-demand AI call), notes field, link out
+- Title, source badge, published date, classifier `one_line` (one-sentence AI blurb generated at ingest), priority badge (breaking/notable/routine), cluster badge if applicable.
+- Click → detail view with the full snippet/text (no on-demand AI call) + link to the source.
 
 ## Architecture
 
 ```
                 ┌──────────────────────────────────┐
-Vercel Cron ──► │ Ingest workers (one per source)  │
-                │ news / SEC / Figma blog / reddit │
-                │ / HN / competitors               │
+GH Actions    ─►│ Ingest workers (one per source)  │
+(15m + hourly)  │ news / SEC / Figma blog / reddit │
+                │ HN / competitors / chart         │
                 └──────────────┬───────────────────┘
                                │ for each new item:
-                               │   1. dedup by external_id
+                               │   1. dedup by (source_id, external_id)
                                │   2. Haiku classifier (relevance + priority + one_line) — API
-                               │   3. drop if relevance < 0.4
-                               │   4. assign to topic cluster
-                               │   5. insert
-                               │   6. if priority='breaking' → enqueue notification
+                               │   3. drop if relevance < 0.5
+                               │   4. for Form 4s: fetch + parse XML, enrich raw_json
+                               │   5. assign to topic cluster
+                               │   6. insert
+                               │   7. if priority='breaking' AND !backfilled → notify
                                ▼
                 ┌──────────────────────────────────┐
                 │ Neon Postgres                    │
                 │ items, sources, classifications, │
-                │ digests, clusters, watchlists,   │
-                │ bookmarks, notes,                │
+                │ digests, clusters, chart_points, │
                 │ notification_channels, sent      │
                 └─────┬───────────────┬────────────┘
                       │               │
@@ -72,16 +72,18 @@ Vercel Cron ──► │ Ingest workers (one per source)  │
                       │  ┌──────────────────────────────────┐
                       │  │ Local digest worker (user's Mac) │
                       │  │ launchd → `claude --print`        │
-                      │  │ Sonnet 4.6 via Max plan           │
+                      │  │ Opus 4.7 via Max plan             │
                       │  │ batches: daily/weekly/monthly     │
+                      │  │ pulls items + Form 4 transactions │
                       │  │ writes summary_md back to Neon    │
+                      │  │ posts to /api/webhooks/digest-... │
                       │  └──────────────────────────────────┘
                       ▼
                 ┌──────────────────────────────────┐
                 │ Next.js app on Vercel            │
                 │ Feed / Digests / Official /      │
-                │ Watchlist / Competitors / Analyst│
-                │ (+ Search, Bookmarks, Notes)     │
+                │ Analyst / Competitors / About    │
+                │ (+ Search, ⌘K, /admin/*)         │
                 └──────────────────────────────────┘
 ```
 
@@ -111,14 +113,12 @@ digests
   summary_md, item_ids int[], model, generated_at
   unique(period, period_start)  -- catch-up logic uses this
 
-watchlists
-  id, name, kind ('person'|'topic'|'keyword'), match_config_json, created_at
-
-bookmarks
-  item_id pk, created_at
-
-item_notes
-  item_id pk, body_md, updated_at
+chart_points
+  symbol text, t timestamptz, close numeric(12,4), currency, fetched_at
+  primary key (symbol, t)
+  -- Daily closes cached hourly by the chart ingester. Yahoo aggressively
+  -- rate-limits Vercel IPs; reading from this table at request time keeps
+  -- /official snappy and resilient.
 
 notification_channels
   id, kind ('email'|'slack'|'discord'), config_json, enabled
@@ -128,10 +128,15 @@ notifications_sent
 
 users
   id, email, github_id, github_username, created_at
-  -- v1 allowlist: just the owner; expand by env var later
+  -- public site; only AUTH_ADMIN (or AUTH_ALLOWLIST[0]) sees /admin/*
+
+-- Schema-present but unused in the current UI:
+--   watchlists, bookmarks, item_notes  (left in case we revive saved-views)
 ```
 
-Indexes: `items(published_at desc)`, `items(source_id, published_at desc)`, `items(cluster_id)`, `item_classifications(priority)`, GIN index on items full_text for FTS.
+Indexes: `items(published_at desc)`, `items(source_id, published_at desc)`, `items(cluster_id)`, `item_classifications(priority)`, GIN index on items full_text for FTS, `chart_points(symbol, t desc)`.
+
+**Form 4 enrichment.** Items from SEC sources where `raw_json.filing_type IN ('4', '4/A')` carry parsed insider-transaction fields merged into `raw_json`: `reporter_name`, `reporter_role`, `is_officer/is_director/is_ten_percent_owner`, `transaction_code`, `transaction` ('purchase'|'sale'|'other'), `shares` (signed net), `value` (USD). Populated by `src/ingest/sec-form4.ts` (cheerio xmlMode parser) on first ingest; backfilled by `npm run backfill:sec-form4-enrich` for legacy rows.
 
 ## Sources
 
@@ -154,12 +159,12 @@ Indexes: `items(published_at desc)`, `items(source_id, published_at desc)`, `ite
 | Sketch | Sketch blog RSS | daily | Low volume |
 | Penpot | Penpot blog RSS + GitHub releases | daily | Low volume; OSS so GH releases are signal |
 
-### Analyst
+### Analyst & market data
 
 | Source | API/feed | Notes |
 |---|---|---|
-| Yahoo Finance | Public endpoints for analyst ratings + price targets for FIG | Free, unofficial but stable |
-| Seeking Alpha | RSS per ticker | Free tier shows headlines + summaries; full articles paywalled |
+| Finnhub (free tier) | `/quote`, `/stock/recommendation`, `/stock/earnings`, `/calendar/earnings` for FIG | Powers the Analyst tab. Requires `FINNHUB_API_KEY`. Premium endpoints (`/stock/price-target`, `/stock/upgrade-downgrade`, estimate revisions) are paywalled and not used. |
+| Yahoo Finance (chart) | `query1`/`query2 finance.yahoo.com/v8/finance/chart/FIG?range=1y&interval=1d` | Used by `src/ingest/chart.ts` to populate `chart_points` hourly. Rate-limits Vercel IPs aggressively — caching the response in Postgres is the whole point. |
 
 ## Operational notes
 
@@ -206,9 +211,9 @@ If we ever hit fallback step 1, also update this note + bump the commit referenc
 
 ## AI usage
 
-- **Ingest-time classifier (Anthropic API, Haiku 4.5).** One call per new item. JSON output: `{ relevance: 0–1, priority: routine|notable|breaking, one_line: string }`. Drop if `relevance < 0.5`. Priority rubric biases toward 'routine' (default) — only true material events escalate to 'breaking'. ~$0.0005/item.
+- **Ingest-time classifier (Anthropic API, Haiku 4.5).** One call per new item via `tool_use` with a forced schema, prompt-cached system message. JSON output: `{ relevance: 0–1, priority: routine|notable|breaking, one_line: string }`. Drop (delete the items row) if `relevance < 0.5`. Priority rubric biases toward 'routine' (default) — only true material events escalate to 'breaking'. Prompt includes an explicit security note instructing Haiku that the Title/URL/Snippet are untrusted third-party data and must not be followed as instructions. ~$0.0005/item.
 - **Topic clustering (Anthropic API, Haiku 4.5).** Periodic job (every 30 min) re-clusters last-24h items by semantic similarity; picks a representative title. Small cost.
-- **Scheduled digests (local Claude Code CLI, Sonnet 4.6, Max plan).** A `launchd` job on the user's Mac runs `scripts/run-digest.ts` daily / weekly / monthly. The script connects to Neon, pulls items for the period, invokes `claude --print` with a structured digest prompt, parses the response, and writes `summary_md` back to the `digests` table. Catch-up: each run checks the recent window for missing digests and generates them — so a daily digest missed because the Mac was asleep at 09:00 gets generated whenever the Mac next runs the job. Cost: $0 marginal (uses Max plan capacity, well within rate limits).
+- **Scheduled digests (local Claude Code CLI, Opus 4.7, Max plan).** A `launchd` job on the user's Mac runs `scripts/run-digest.ts` daily / weekly / monthly. The script connects to Neon, pulls items for the period, **also pulls aggregated Form 4 transactions** for the same window, builds a structured prompt (item lists grouped by priority + a one-line-per-row insider-transaction preamble), invokes `claude --print --model claude-opus-4-7 --output-format json`, and writes `summary_md` back to `digests`. The prompt requires exactly five H2 sections: `## Breaking`, `## Notable`, `## Investor highlights`, `## Routine`, `## What to watch`. The Investor highlights section cites specific share counts and dollar values from the Form 4 preamble. After insert, the worker POSTs to `/api/webhooks/digest-published` with `DIGEST_WEBHOOK_SECRET` (constant-time compared) so the Vercel function can fan out via Resend. Catch-up: each run checks the recent window for missing digests and generates them — so a daily digest missed because the Mac was asleep at 09:00 gets generated whenever the Mac next runs the job. Cost: $0 marginal (uses Max plan capacity).
 
 **Estimated monthly cost:** $3–5 API (classifier + clustering) + $0 for digests (Max plan) + $0 for notifications (Resend free tier).
 
@@ -216,17 +221,20 @@ If we ever hit fallback step 1, also update this note + bump the commit referenc
 
 | Job | Cadence | Where | What |
 |---|---|---|---|
-| `ingest:news` | every 15 min | Vercel Cron | Google News RSS for Figma |
-| `ingest:reddit` | every 15 min | Vercel Cron | Reddit search across configured subs |
-| `ingest:hn` | every 15 min | Vercel Cron | HN Algolia search |
-| `ingest:figma-blog` | hourly | Vercel Cron | Figma blog RSS |
-| `ingest:sec` | hourly | Vercel Cron | EDGAR for new Figma filings |
-| `ingest:competitors` | hourly | Vercel Cron | Adobe / Canva / Sketch / Penpot |
-| `cluster:recent` | every 30 min | Vercel Cron | Re-cluster last-24h items |
-| `notify:breaking` | event-driven | Vercel Function | On insert of priority=breaking, fan out to enabled channels |
-| `digest:daily` | 09:00 daily | **launchd (user's Mac)** | Daily digest via local Claude Code |
+| `ingest:news` | every 15 min | **GitHub Actions** cron | Google News RSS for Figma |
+| `ingest:reddit` | every 15 min | **GitHub Actions** cron | Reddit RSS across configured subs (see Reddit op note) |
+| `ingest:hn` | every 15 min | **GitHub Actions** cron | HN Algolia search |
+| `ingest:figma-blog` | hourly | **GitHub Actions** cron | Figma blog RSS |
+| `ingest:sec` | hourly | **GitHub Actions** cron | EDGAR for new Figma filings (with Form 4 XML enrichment) |
+| `ingest:competitors` | hourly | **GitHub Actions** cron | Adobe / Canva / Sketch / Penpot / AI challengers |
+| `ingest:chart` | hourly | **GitHub Actions** cron | Yahoo daily-close fetch → upsert `chart_points` |
+| `cluster:recent` | every 30 min | **GitHub Actions** cron | Re-cluster last-24h items |
+| `notify:breaking` | event-driven | Vercel Function | On insert of priority=breaking (skipping `backfilled=true`), fan out to enabled channels |
+| `digest:daily` | 09:00 daily | **launchd (user's Mac)** | Daily digest via local Claude Code (Opus 4.7) |
 | `digest:weekly` | Mondays 09:00 | **launchd (user's Mac)** | Weekly digest |
 | `digest:monthly` | 1st of month 09:00 | **launchd (user's Mac)** | Monthly digest |
+
+Vercel Hobby caps cron at 2 daily-only jobs, so the ingest schedule lives in `.github/workflows/cron.yml` as two matrix jobs (`*/15 * * * *` and `0 * * * *`) that hit `/api/cron/ingest/*` with `Authorization: Bearer $CRON_SECRET`. The Vercel function handlers verify via `crypto.timingSafeEqual`. `vercel.json` still configures 2 daily cron entries as a fallback.
 
 Local digest jobs use `StartCalendarInterval` + the script's catch-up logic so missed runs (Mac asleep, traveling, etc.) are picked up on next wake.
 
@@ -239,23 +247,30 @@ Local digest jobs use `StartCalendarInterval` + the script's catch-up logic so m
 - **Secrets (Vercel env vars):**
   - `DATABASE_URL` (Neon)
   - `ANTHROPIC_API_KEY` (classifier + clustering)
+  - `FINNHUB_API_KEY` (Analyst tab)
   - `RESEND_API_KEY`, `RESEND_FROM_EMAIL`, `RESEND_TO_EMAIL`
-  - `NEXTAUTH_SECRET`, `NEXTAUTH_URL`, `GITHUB_CLIENT_ID`, `GITHUB_CLIENT_SECRET`
-  - `AUTH_ALLOWLIST` (comma-separated GitHub usernames, e.g. `tGoh98`)
-- **Secrets (local, for digest worker):**
-  - `DATABASE_URL` in `~/.config/css/digest.env` (outside the repo, mode 600)
+  - `NEXTAUTH_SECRET`, `NEXTAUTH_URL`, `AUTH_GITHUB_ID`, `AUTH_GITHUB_SECRET`
+  - `AUTH_ALLOWLIST` (comma-separated GitHub usernames, e.g. `tGoh98`); `AUTH_ADMIN` (single username; defaults to allowlist[0])
+  - `CRON_SECRET` (bearer token for `/api/cron/*`; constant-time compared)
+  - `DIGEST_WEBHOOK_SECRET` (bearer for `/api/webhooks/digest-published`)
+- **Secrets (GitHub Actions repo secrets):**
+  - `CRON_SECRET` (must match the Vercel env var of the same name; drives the cron workflow)
+- **Secrets (local, for digest worker):** all in `~/.config/css/digest.env` (outside the repo, mode 600):
+  - `DATABASE_URL`, `APP_URL`, `DIGEST_WEBHOOK_SECRET`, `CLAUDE_BIN` (optional)
 - **Cost:** $0 infra (Vercel + Neon + Resend free tiers), ~$3–5/mo Anthropic API, $0 digests (Max plan)
 
 ## Backfill strategy
 
 One-shot script per source: `npm run backfill:<source>`. Marks items with `backfilled = true`. Run once at project start, then normal cron takes over. Backfilled items go through the same classifier — relevance threshold handles noise.
 
-- **SEC EDGAR** — walk filings index from Figma's CIK back to S-1 (Apr 2025). Cheap, complete.
+- **SEC EDGAR** — walk filings index from Figma's CIK back to S-1 (Apr 2025). Form 4 XML is fetched + parsed inline so insider rows are usable immediately. Cheap, complete.
+- **`backfill:sec-form4-enrich`** — one-shot SQL-normalize + Form 4 XML enrichment for legacy SEC rows whose `raw_json` was written by an earlier backfill (different key names, no insider details). Re-runnable, idempotent, polite to EDGAR (≤7 req/s).
 - **Hacker News** — Algolia date-ranged search. Cheap, complete.
-- **Figma blog** — scrape `/blog?page=N` paginated archive until exhausted.
-- **Reddit** — search API with date ranges; accept ~few months of depth.
+- **Figma blog** — scrape `/blog?page=N` paginated archive until exhausted; only items with a real `<time>` element are kept (filters out category index pages).
+- **Reddit** — search RSS with date ranges; accept ~few months of depth.
 - **Google News** — no historical backfill via free path. Live forward only.
-- **Competitors** — same shape as primary news (recent-only for news; full for blogs).
+- **Competitors** — same shape as primary news (recent-only for news; full for blogs). DB-driven config: `/admin/competitors` page edits the `sources` table directly.
+- **Chart** — `npm exec tsx --env-file=.env.local src/ingest/chart.ts` (or just trigger the cron route) seeds `chart_points` with 1y of daily closes; subsequent hourly polls upsert.
 
 ## Decisions log
 
@@ -267,10 +282,15 @@ One-shot script per source: `npm run backfill:<source>`. Marks items with `backf
 | 2026-05-13 | Single Haiku call does relevance + priority + one-line together | One round-trip handles "is this actually Figma" and "is this breaking" |
 | 2026-05-13 | News aggregator = Google News RSS for v1 | Free and broad. NewsAPI free tier too restricted; paid tier overkill. |
 | 2026-05-13 | Core sources for v1: Google News, SEC EDGAR, Figma blog, Reddit, HN | User confirmed |
-| 2026-05-13 | Tabs: Feed, Digests, Official, Watchlist, Competitors, Analyst | 6 tabs (Chat dropped) |
+| 2026-05-13 | Tabs: Feed, Digests, Official, Analyst, Competitors, About | Chat dropped pre-launch; Watchlist/Saved/Notes dropped post-launch (low utility for a single-user site). About added with a loud "not investment advice / vibe-coded" disclaimer. |
 | 2026-05-13 | Drop items with classifier relevance < 0.5 (raised from 0.4) + tighten priority rubric | First-run backfill produced too many "breaking" items because the original rubric called every S-1/8-K breaking. Default is now 'routine'; only material events escalate. |
 | 2026-05-13 | Insider Activity surfaced as widget inside Official tab | Form 4 already in ingest; no need for a separate tab |
-| 2026-05-13 | Analyst tab = ratings + price-target chart + rating-change events + Seeking Alpha RSS | Full proprietary reports require Bloomberg/Refinitiv; not realistically scrapable |
+| 2026-05-14 | Analyst tab = Finnhub free tier (quote, monthly consensus, recommendation trend, earnings beat/miss) | Yahoo Finance for analyst data 401s from Vercel; E*TRADE / Bloomberg / Refinitiv content is licensed-to-user and not legally redistributable. Finnhub free tier covers ~60–70% of the useful signal. Premium endpoints (per-analyst upgrade/downgrade, price targets, estimate revisions) explicitly out of scope. |
+| 2026-05-14 | Stock chart cached in `chart_points` table, refreshed hourly via GH Actions | Yahoo Finance aggressively rate-limits Vercel IPs (429 on every render). One hourly write from a rotating GH Actions runner is enough, and the page reads straight from Postgres. |
+| 2026-05-14 | Form 4 XML parsed at ingest, structured fields merged into `raw_json` | Insider Activity widget needs reporter/role/shares/value — title alone is useless. cheerio (already a dep) handles the XML; ≤10 req/s to EDGAR. |
+| 2026-05-14 | Digests get an `## Investor highlights` H2 with a structured Form 4 preamble | Opus can synthesize multi-row Form 4 events into a single narrative when given the parsed transactions as a flat list (date, reporter, role, direction, shares, value, url). Without the preamble it hallucinates numbers. |
+| 2026-05-14 | Switch ingest cron to GitHub Actions (was Vercel Cron) | Vercel Hobby caps cron at 2 daily-only entries. GH Actions matrix gives us per-source 15-min/hourly granularity for free. |
+| 2026-05-14 | Public read-only site; only `/admin/*` is gated | Allowlist auth added friction with zero benefit — the data is already public elsewhere. GitHub sign-in stays for admin tools (competitor management). |
 | 2026-05-13 | Retention: keep everything forever | DB is small, archival is valuable for digests |
 | 2026-05-13 | Notifications: Resend (email only for v1) | 3k emails/mo free; lightweight setup; Slack/Discord can be added later |
 | 2026-05-13 | Auth: NextAuth + GitHub OAuth, allowlist via env var | Per-user identity preserved for bookmarks/notes; allowlist defaults to just the owner |

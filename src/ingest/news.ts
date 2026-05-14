@@ -53,37 +53,51 @@ export async function ingest(): Promise<IngestResult> {
     return result;
   }
 
-  for (const entry of feed.items as GoogleNewsItem[]) {
-    if (!entry.link || !entry.title) {
-      result.errors.push("google-news: missing title/link");
-      continue;
-    }
-    const externalId = entry.guid ?? entry.link;
-    const publishedAt = entry.isoDate
-      ? new Date(entry.isoDate)
-      : entry.pubDate
-        ? new Date(entry.pubDate)
-        : new Date();
-    const sourceLabel =
-      typeof entry.source === "string"
-        ? entry.source
-        : (entry.source?._ ?? null);
-    const snippet = entry.contentSnippet ?? entry.content ?? null;
+  // Google News returns ~100 items; serial classification (≈1s each via
+  // Anthropic) blows past Vercel Hobby's 60s function cap on the first run.
+  // Cap per-cycle work and parallelize the classifier calls. Items beyond
+  // MAX_ITEMS are the older ones and will be ingested in subsequent ticks
+  // as the feed shifts.
+  const MAX_ITEMS = 30;
+  const CONCURRENCY = 6;
+  const entries = (feed.items as GoogleNewsItem[]).slice(0, MAX_ITEMS);
 
-    await insertAndClassify(
-      sourceId,
-      "Google News (Figma)",
-      "news",
-      {
-        externalId,
-        url: entry.link,
-        title: entry.title,
-        snippet,
-        author: sourceLabel,
-        publishedAt,
-        rawJson: entry as unknown as Record<string, unknown>,
-      },
-      result,
+  for (let i = 0; i < entries.length; i += CONCURRENCY) {
+    const batch = entries.slice(i, i + CONCURRENCY);
+    await Promise.allSettled(
+      batch.map(async (entry) => {
+        if (!entry.link || !entry.title) {
+          result.errors.push("google-news: missing title/link");
+          return;
+        }
+        const externalId = entry.guid ?? entry.link;
+        const publishedAt = entry.isoDate
+          ? new Date(entry.isoDate)
+          : entry.pubDate
+            ? new Date(entry.pubDate)
+            : new Date();
+        const sourceLabel =
+          typeof entry.source === "string"
+            ? entry.source
+            : (entry.source?._ ?? null);
+        const snippet = entry.contentSnippet ?? entry.content ?? null;
+
+        await insertAndClassify(
+          sourceId,
+          "Google News (Figma)",
+          "news",
+          {
+            externalId,
+            url: entry.link,
+            title: entry.title,
+            snippet,
+            author: sourceLabel,
+            publishedAt,
+            rawJson: entry as unknown as Record<string, unknown>,
+          },
+          result,
+        );
+      }),
     );
   }
 

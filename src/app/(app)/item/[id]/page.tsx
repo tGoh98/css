@@ -5,6 +5,7 @@ import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { Separator } from "@/components/ui/separator";
 import { PriorityBadge } from "@/components/priority-badge";
 import { fetchItemById } from "@/lib/queries/items";
+import { renderMarkdown } from "@/lib/markdown";
 import { relativeTime } from "@/lib/relative-time";
 
 export const dynamic = "force-dynamic";
@@ -17,6 +18,14 @@ export default async function ItemDetailPage({ params }: { params: Promise<{ id:
   const fi = await fetchItemById(itemId);
   if (!fi) notFound();
   const { item, classification, source } = fi;
+  const isExternal = /^https?:\/\//i.test(item.url);
+
+  // Items authored as Markdown (e.g. a comparative digest written from
+  // /admin/upload-style flows) opt in via raw_json.render === "markdown".
+  // Render them inline as HTML so headings/lists/bold actually display
+  // instead of showing the raw markdown source.
+  const renderAsMarkdown =
+    (item.rawJson as { render?: string } | null)?.render === "markdown";
 
   return (
     <div className="flex flex-col gap-6">
@@ -46,10 +55,15 @@ export default async function ItemDetailPage({ params }: { params: Promise<{ id:
               {classification.oneLine}
             </p>
           )}
-          {item.snippet && (
+          {item.snippet && !renderAsMarkdown && (
             <p className="mb-3 text-sm leading-relaxed text-muted-foreground">{item.snippet}</p>
           )}
-          {item.fullText && (
+          {item.fullText && renderAsMarkdown ? (
+            <div
+              className="prose prose-sm max-w-none"
+              dangerouslySetInnerHTML={{ __html: renderMarkdown(item.fullText) }}
+            />
+          ) : item.fullText ? (
             <details className="text-sm">
               <summary className="cursor-pointer text-xs text-muted-foreground hover:text-foreground">
                 Show full text
@@ -58,16 +72,20 @@ export default async function ItemDetailPage({ params }: { params: Promise<{ id:
                 {item.fullText}
               </div>
             </details>
+          ) : null}
+          {isExternal && (
+            <>
+              <Separator className="my-4" />
+              <a
+                href={item.url}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-sm font-medium text-foreground underline underline-offset-2"
+              >
+                Open original ↗
+              </a>
+            </>
           )}
-          <Separator className="my-4" />
-          <a
-            href={item.url}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="text-sm font-medium text-foreground underline underline-offset-2"
-          >
-            Open original ↗
-          </a>
         </CardContent>
       </Card>
     </div>

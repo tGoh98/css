@@ -6,7 +6,7 @@ import { digests } from "@/db/schema";
 export type DigestRow = typeof digests.$inferSelect;
 
 export async function listDigests(
-  period?: "day" | "week" | "month",
+  period?: string,
   limit = 50,
   offset = 0,
 ): Promise<DigestRow[]> {

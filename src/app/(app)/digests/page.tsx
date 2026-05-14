@@ -17,12 +17,15 @@ const PERIOD_LABEL: Record<string, string> = {
   day: "Daily",
   week: "Weekly",
   month: "Monthly",
+  event: "Event",
 };
 
 export default async function DigestsPage({ searchParams }: { searchParams: SearchParams }) {
   const sp = await searchParams;
   const period =
-    sp.period === "day" || sp.period === "week" || sp.period === "month" ? sp.period : undefined;
+    sp.period === "day" || sp.period === "week" || sp.period === "month" || sp.period === "event"
+      ? sp.period
+      : undefined;
   const page = Math.max(1, Number(sp.page) || 1);
   const offset = (page - 1) * PAGE_SIZE;
 
@@ -64,6 +67,7 @@ export default async function DigestsPage({ searchParams }: { searchParams: Sear
               { value: "day", label: "Daily" },
               { value: "week", label: "Weekly" },
               { value: "month", label: "Monthly" },
+              { value: "event", label: "Event" },
             ],
           },
         ]}

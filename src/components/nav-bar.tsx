@@ -7,7 +7,7 @@ const TABS = [
   { label: "Official", href: "/official" },
   { label: "Competitors", href: "/competitors" },
   { label: "Analyst", href: "/analyst" },
-  { label: "Saved", href: "/saved" },
+  { label: "About", href: "/about" },
 ] as const;
 
 export function NavBar() {

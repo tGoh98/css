@@ -1,48 +1,44 @@
 import Link from "next/link";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
-import { BookmarkButton } from "@/components/bookmark-button";
 import { PriorityBadge } from "@/components/priority-badge";
 import { relativeTime } from "@/lib/relative-time";
 import type { FeedItem } from "@/lib/queries/items";
 
 export function ItemCard({ feedItem }: { feedItem: FeedItem }) {
-  const { item, classification, source, cluster, clusterCount, bookmarked } = feedItem;
+  const { item, classification, source, cluster, clusterCount } = feedItem;
   const showClusterBadge = (clusterCount ?? 0) > 1;
   return (
     <Card className="gap-3 py-4">
       <CardHeader className="px-4">
-        <div className="flex items-start justify-between gap-3">
-          <div className="min-w-0 flex-1">
-            <div className="mb-1 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
-              {source ? (
-                <Badge variant="outline" className="rounded-md text-[10px] font-medium">
-                  {source.name}
-                </Badge>
-              ) : null}
-              <PriorityBadge priority={classification?.priority} />
-              <span title={item.publishedAt.toString()}>
-                {relativeTime(item.publishedAt)}
-              </span>
-              {item.author ? <span>· {item.author}</span> : null}
-              {showClusterBadge ? (
-                <Badge variant="ghost" className="text-[10px]">
-                  +{(clusterCount ?? 1) - 1} similar
-                </Badge>
-              ) : null}
-            </div>
-            <a
-              href={item.url}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="block text-sm font-semibold leading-snug text-foreground hover:underline"
-            >
-              {cluster?.representativeTitle && showClusterBadge
-                ? cluster.representativeTitle
-                : item.title}
-            </a>
+        <div className="min-w-0 flex-1">
+          <div className="mb-1 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+            {source ? (
+              <Badge variant="outline" className="rounded-md text-[10px] font-medium">
+                {source.name}
+              </Badge>
+            ) : null}
+            <PriorityBadge priority={classification?.priority} />
+            <span title={item.publishedAt.toString()}>
+              {relativeTime(item.publishedAt)}
+            </span>
+            {item.author ? <span>· {item.author}</span> : null}
+            {showClusterBadge ? (
+              <Badge variant="ghost" className="text-[10px]">
+                +{(clusterCount ?? 1) - 1} similar
+              </Badge>
+            ) : null}
           </div>
-          <BookmarkButton itemId={item.id} initial={bookmarked} />
+          <a
+            href={item.url}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="block text-sm font-semibold leading-snug text-foreground hover:underline"
+          >
+            {cluster?.representativeTitle && showClusterBadge
+              ? cluster.representativeTitle
+              : item.title}
+          </a>
         </div>
       </CardHeader>
       <CardContent className="px-4">

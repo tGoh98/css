@@ -1,5 +1,5 @@
 import "server-only";
-import { and, asc, eq, gte } from "drizzle-orm";
+import { and, asc, desc, eq, gte } from "drizzle-orm";
 import { db } from "@/db";
 import { chartPoints } from "@/db/schema";
 
@@ -9,6 +9,8 @@ export type ChartData = {
   range: string;
   points: ChartPoint[];
   currency?: string;
+  /** Most recent `fetched_at` across the returned points (ms-since-epoch). */
+  fetchedAt?: number;
 };
 
 /**
@@ -34,11 +36,20 @@ export async function fetchChart(
 
   if (rows.length === 0) return null;
 
+  // Most recent fetched_at across the symbol — drives the "polled at" disclaimer.
+  const [latest] = await db
+    .select({ fetchedAt: chartPoints.fetchedAt })
+    .from(chartPoints)
+    .where(eq(chartPoints.symbol, symbol))
+    .orderBy(desc(chartPoints.fetchedAt))
+    .limit(1);
+
   return {
     symbol,
     range,
     currency: rows[0].currency ?? undefined,
     points: rows.map((r) => ({ t: r.t.getTime(), c: Number(r.close) })),
+    fetchedAt: latest?.fetchedAt.getTime(),
   };
 }
 

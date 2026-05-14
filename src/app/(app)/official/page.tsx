@@ -20,17 +20,19 @@ export default async function OfficialPage({ searchParams }: { searchParams: Sea
   const offset = (page - 1) * PAGE_SIZE;
 
   const [chart, insider, feedItems, eventItems] = await Promise.all([
-    fetchChart("FIG", "3mo"),
+    // Fetch the widest range we offer; FigChart slices on the client when
+    // the user switches range tabs, so this is one trip per page load.
+    fetchChart("FIG", "5y"),
     fetchRecentInsiderActivity(10),
     fetchFeed(
       { kinds: ["sec", "blog"] },
       { limit: PAGE_SIZE + 1, offset, groupByCluster: false },
     ),
-    // Separate pull for the chart event markers — always last 90 days,
-    // regardless of which page the user is on.
+    // Event-marker pool — pulled once at the widest window so range tabs can
+    // filter client-side without re-fetching.
     fetchFeed(
       { kinds: ["sec", "blog"] },
-      { limit: 200, groupByCluster: false },
+      { limit: 1000, groupByCluster: false },
     ),
   ]);
 
@@ -42,6 +44,8 @@ export default async function OfficialPage({ searchParams }: { searchParams: Sea
     title: fi.item.title,
     url: fi.item.url,
     priority: (fi.classification?.priority as ChartEvent["priority"]) ?? "routine",
+    source: fi.source?.name ?? null,
+    oneLine: fi.classification?.oneLine ?? null,
   }));
 
   function pageHref(targetPage: number): string {
@@ -57,7 +61,7 @@ export default async function OfficialPage({ searchParams }: { searchParams: Sea
         </p>
       </div>
 
-      <FigChart data={chart} events={chartEvents} caption="3 months · daily close" />
+      <FigChart data={chart} events={chartEvents} caption="Daily close" />
 
       <InsiderActivity rows={insider} />
 

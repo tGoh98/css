@@ -327,6 +327,86 @@ export async function notifyIngestSaturation(
 }
 
 /**
+ * Notify enabled email channels that the digest worker ran but produced no
+ * new digests — every attempted range errored. Fire-and-forget; never throws.
+ * Called from `scripts/run-digest.ts` at end-of-run when failed > 0 AND
+ * written == 0.
+ */
+export async function notifyDigestFailure(args: {
+  period: "day" | "week" | "month";
+  totalRanges: number;
+  failedRanges: number;
+  sampleError: string | null;
+}): Promise<void> {
+  try {
+    const channels = await enabledEmailChannels();
+    if (channels.length === 0) {
+      console.log(`[notify] digest-failure (${args.period}): no enabled email channels`);
+      return;
+    }
+
+    const resend = resendClient();
+    const subject = `[CSS Digest] ${args.period} worker failed — ${args.failedRanges}/${args.totalRanges} ranges errored`;
+    const text =
+      `The ${args.period} digest worker ran but produced no new digests. ${args.failedRanges} of ${args.totalRanges} attempted ranges errored.\n\n` +
+      (args.sampleError ? `Sample error:\n${args.sampleError}\n\n` : "") +
+      `Re-run manually with:\n  npm exec tsx -- scripts/run-digest.ts --period ${args.period} --catch-up\n\n` +
+      `If the manual re-run also fails, check ~/.config/css/digest.env (DATABASE_URL freshness, etc.) and the worker log at ~/.local/state/css/digest.log.\n`;
+    const html = `
+      <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; line-height: 1.5;">
+        <p style="margin: 0 0 12px;">
+          <span style="display:inline-block; padding:2px 8px; border-radius:4px; background:#fee2e2; color:#991b1b; font-size:11px; font-weight:600; text-transform:uppercase; letter-spacing:0.05em;">Digest failure</span>
+          <span style="margin-left:8px; padding:2px 8px; border-radius:4px; background:#eef2ff; color:#3730a3; font-size:11px; font-weight:600;">${escapeHtml(args.period)}</span>
+        </p>
+        <p style="margin: 0 0 12px;">
+          The ${escapeHtml(args.period)} digest worker ran but produced no new digests —
+          <strong>${args.failedRanges}/${args.totalRanges}</strong> ranges errored after retries.
+        </p>
+        ${
+          args.sampleError
+            ? `<details style="margin: 0 0 12px;"><summary style="cursor:pointer; color:#6b7280; font-size:12px;">Sample error</summary><pre style="margin: 6px 0 0; padding: 8px; background:#f3f4f6; border-radius:4px; font-size:11px; overflow:auto;">${escapeHtml(args.sampleError)}</pre></details>`
+            : ""
+        }
+        <p style="margin: 0; color:#6b7280; font-size:13px;">
+          Re-run manually: <code style="background:#f3f4f6; padding:1px 4px; border-radius:3px;">npm exec tsx -- scripts/run-digest.ts --period ${escapeHtml(args.period)} --catch-up</code>
+        </p>
+      </div>
+    `;
+
+    for (const channel of channels) {
+      try {
+        if (resend) {
+          const result = await resend.emails.send({
+            from: fromAddress(),
+            to: channel.to,
+            subject,
+            html,
+            text,
+          });
+          if (result.error) {
+            console.error(
+              `[notify] digest-failure send failed for channel ${channel.id}:`,
+              result.error,
+            );
+          }
+        } else {
+          console.log(
+            `[notify] (dry-run, no key) would send digest-failure to ${channel.to}: ${subject}`,
+          );
+        }
+      } catch (innerErr) {
+        console.error(
+          `[notify] failed to notify channel ${channel.id} (digest-failure):`,
+          innerErr,
+        );
+      }
+    }
+  } catch (err) {
+    console.error(`[notify] notifyDigestFailure(${args.period}) failed:`, err);
+  }
+}
+
+/**
  * Notify enabled email channels about a newly-published digest. Does not
  * deduplicate per-channel (digests are intentionally re-sent if the worker
  * regenerates them); the caller controls invocation cadence.

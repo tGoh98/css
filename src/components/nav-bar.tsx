@@ -4,6 +4,7 @@ import { auth } from "@/lib/auth";
 import { isAdminUsername } from "@/lib/env";
 
 const PUBLIC_TABS = [
+  { label: "Home", href: "/" },
   { label: "Feed", href: "/feed" },
   { label: "Digests", href: "/digests" },
   { label: "Official", href: "/official" },

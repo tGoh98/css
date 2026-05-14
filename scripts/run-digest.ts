@@ -90,6 +90,44 @@ function log(fields: Record<string, unknown>): void {
   }
 }
 
+/**
+ * Retry a thenable with exponential backoff. Used to absorb the rare
+ * Neon-connect / transient Postgres flake — the failure mode that took out
+ * the 2026-05-14 09:02 PDT run, where all 14 ranges errored within 600 ms
+ * because the first connection attempt failed and there was no retry.
+ *
+ * Defaults: 3 attempts at 500 ms → 2 s → 8 s back-off (10.5 s total ceiling).
+ */
+async function withRetry<T>(
+  label: string,
+  fn: () => Promise<T>,
+  opts: { attempts?: number; baseMs?: number; factor?: number } = {},
+): Promise<T> {
+  const attempts = opts.attempts ?? 3;
+  const baseMs = opts.baseMs ?? 500;
+  const factor = opts.factor ?? 4;
+  let lastErr: unknown;
+  for (let i = 0; i < attempts; i++) {
+    try {
+      return await fn();
+    } catch (err) {
+      lastErr = err;
+      if (i === attempts - 1) break;
+      const delay = baseMs * Math.pow(factor, i);
+      log({
+        level: "warn",
+        event: "retry",
+        label,
+        attempt: i + 1,
+        delayMs: delay,
+        err: err instanceof Error ? err.message : String(err),
+      });
+      await new Promise((r) => setTimeout(r, delay));
+    }
+  }
+  throw lastErr;
+}
+
 // ---------------------------------------------------------------------------
 // CLI args.
 // ---------------------------------------------------------------------------
@@ -265,38 +303,41 @@ async function fetchItemsForPeriod(
   const drizzleOrm = await import("drizzle-orm");
   const { and, gte, lt, sql: dsql, eq, desc } = drizzleOrm;
 
-  const rows = await db
-    .select({
-      id: items.id,
-      title: items.title,
-      url: items.url,
-      sourceName: sources.name,
-      oneLine: itemClassifications.oneLine,
-      priority: itemClassifications.priority,
-      relevance: itemClassifications.relevance,
-      publishedAt: items.publishedAt,
-    })
-    .from(items)
-    .innerJoin(itemClassifications, eq(itemClassifications.itemId, items.id))
-    .innerJoin(sources, eq(sources.id, items.sourceId))
-    .where(
-      and(
-        gte(items.publishedAt, range.periodStart),
-        lt(items.publishedAt, range.periodEnd),
-        // relevance >= 0.4 (column is numeric → text cast or just compare as string-safe via sql)
-        dsql`${itemClassifications.relevance} >= 0.4`,
-      ),
-    )
-    // Order: priority (breaking > notable > routine), then published_at desc.
-    .orderBy(
-      dsql`case ${itemClassifications.priority}
-              when 'breaking' then 0
-              when 'notable' then 1
-              else 2
-            end`,
-      desc(items.publishedAt),
-    )
-    .limit(ITEM_CAP);
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const rows = await withRetry<any[]>("fetchItemsForPeriod", () =>
+    db
+      .select({
+        id: items.id,
+        title: items.title,
+        url: items.url,
+        sourceName: sources.name,
+        oneLine: itemClassifications.oneLine,
+        priority: itemClassifications.priority,
+        relevance: itemClassifications.relevance,
+        publishedAt: items.publishedAt,
+      })
+      .from(items)
+      .innerJoin(itemClassifications, eq(itemClassifications.itemId, items.id))
+      .innerJoin(sources, eq(sources.id, items.sourceId))
+      .where(
+        and(
+          gte(items.publishedAt, range.periodStart),
+          lt(items.publishedAt, range.periodEnd),
+          // relevance >= 0.4 (column is numeric → text cast or just compare as string-safe via sql)
+          dsql`${itemClassifications.relevance} >= 0.4`,
+        ),
+      )
+      // Order: priority (breaking > notable > routine), then published_at desc.
+      .orderBy(
+        dsql`case ${itemClassifications.priority}
+                when 'breaking' then 0
+                when 'notable' then 1
+                else 2
+              end`,
+        desc(items.publishedAt),
+      )
+      .limit(ITEM_CAP),
+  );
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   return rows.map((r: any) => ({
@@ -326,23 +367,26 @@ async function fetchInsiderForPeriod(
   const drizzleOrm = await import("drizzle-orm");
   const { and, eq, gte, lt, sql: dsql, desc } = drizzleOrm;
 
-  const rows = await db
-    .select({
-      url: items.url,
-      publishedAt: items.publishedAt,
-      raw: items.rawJson,
-    })
-    .from(items)
-    .innerJoin(sources, eq(sources.id, items.sourceId))
-    .where(
-      and(
-        eq(sources.kind, "sec"),
-        dsql`${items.rawJson}->>'filing_type' in ('4', '4/A')`,
-        gte(items.publishedAt, range.periodStart),
-        lt(items.publishedAt, range.periodEnd),
-      ),
-    )
-    .orderBy(desc(items.publishedAt));
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const rows = await withRetry<any[]>("fetchInsiderForPeriod", () =>
+    db
+      .select({
+        url: items.url,
+        publishedAt: items.publishedAt,
+        raw: items.rawJson,
+      })
+      .from(items)
+      .innerJoin(sources, eq(sources.id, items.sourceId))
+      .where(
+        and(
+          eq(sources.kind, "sec"),
+          dsql`${items.rawJson}->>'filing_type' in ('4', '4/A')`,
+          gte(items.publishedAt, range.periodStart),
+          lt(items.publishedAt, range.periodEnd),
+        ),
+      )
+      .orderBy(desc(items.publishedAt)),
+  );
 
   return rows
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -544,11 +588,13 @@ async function digestExists(
 ): Promise<boolean> {
   const { digests } = schema;
   const { and, eq } = await import("drizzle-orm");
-  const rows = await db
-    .select({ id: digests.id })
-    .from(digests)
-    .where(and(eq(digests.period, period), eq(digests.periodStart, range.periodStart)))
-    .limit(1);
+  const rows = await withRetry<Array<{ id: number }>>("digestExists", () =>
+    db
+      .select({ id: digests.id })
+      .from(digests)
+      .where(and(eq(digests.period, period), eq(digests.periodStart, range.periodStart)))
+      .limit(1),
+  );
   return rows.length > 0;
 }
 
@@ -567,18 +613,20 @@ async function insertDigest(
   },
 ): Promise<number | null> {
   const { digests } = schema;
-  const inserted = await db
-    .insert(digests)
-    .values({
-      period: row.period,
-      periodStart: row.periodStart,
-      periodEnd: row.periodEnd,
-      summaryMd: row.summaryMd,
-      itemIds: row.itemIds,
-      model: row.model,
-    })
-    .onConflictDoNothing({ target: [digests.period, digests.periodStart] })
-    .returning({ id: digests.id });
+  const inserted = await withRetry<Array<{ id: number }>>("insertDigest", () =>
+    db
+      .insert(digests)
+      .values({
+        period: row.period,
+        periodStart: row.periodStart,
+        periodEnd: row.periodEnd,
+        summaryMd: row.summaryMd,
+        itemIds: row.itemIds,
+        model: row.model,
+      })
+      .onConflictDoNothing({ target: [digests.period, digests.periodStart] })
+      .returning({ id: digests.id }),
+  );
   return inserted[0]?.id ?? null;
 }
 
@@ -610,6 +658,12 @@ async function pingWebhook(digestId: number): Promise<void> {
 // Main per-period flow.
 // ---------------------------------------------------------------------------
 
+type GenerateStatus =
+  | { kind: "written" }
+  | { kind: "skip_exists" }
+  | { kind: "skip_no_items" }
+  | { kind: "failed"; err: string };
+
 async function generateOne(
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   db: any,
@@ -617,13 +671,13 @@ async function generateOne(
   schema: any,
   period: Period,
   range: PeriodRange,
-): Promise<void> {
+): Promise<GenerateStatus> {
   const startStr = range.periodStart.toISOString();
   const endStr = range.periodEnd.toISOString();
   try {
     if (await digestExists(db, schema, period, range)) {
       log({ level: "info", event: "skip_exists", period, periodStart: startStr });
-      return;
+      return { kind: "skip_exists" };
     }
 
     const [items, insider] = await Promise.all([
@@ -638,7 +692,7 @@ async function generateOne(
         periodStart: startStr,
         periodEnd: endStr,
       });
-      return;
+      return { kind: "skip_no_items" };
     }
 
     const prompt = buildPrompt(period, range, items, insider);
@@ -676,15 +730,18 @@ async function generateOne(
     });
 
     if (id !== null) await pingWebhook(id);
+    return { kind: "written" };
   } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
     log({
       level: "error",
       event: "digest_failed",
       period,
       periodStart: startStr,
-      err: err instanceof Error ? err.message : String(err),
+      err: message,
       stack: err instanceof Error ? err.stack : undefined,
     });
+    return { kind: "failed", err: message };
   }
 }
 
@@ -718,11 +775,58 @@ async function main(): Promise<void> {
     })),
   });
 
+  let written = 0;
+  let skipExists = 0;
+  let skipNoItems = 0;
+  let failed = 0;
+  let firstError: string | null = null;
   for (const range of ranges) {
-    await generateOne(db, schema, args.period, range);
+    const s = await generateOne(db, schema, args.period, range);
+    if (s.kind === "written") written += 1;
+    else if (s.kind === "skip_exists") skipExists += 1;
+    else if (s.kind === "skip_no_items") skipNoItems += 1;
+    else {
+      failed += 1;
+      if (firstError === null) firstError = s.err;
+    }
   }
 
-  log({ level: "info", event: "run_end", period: args.period });
+  log({
+    level: "info",
+    event: "run_end",
+    period: args.period,
+    totals: { ranges: ranges.length, written, skipExists, skipNoItems, failed },
+  });
+
+  // Alert when the run produced zero new digests but at least one range
+  // errored. Catches the 2026-05-14 morning incident pattern (all ranges
+  // failed at first-connection time, run exited 0, user discovered hours
+  // later). Successful skip_exists / skip_no_items days don't trigger.
+  if (failed > 0 && written === 0) {
+    try {
+      const notifyMod = await import(resolve(REPO_ROOT, "src/notify/index.ts"));
+      await notifyMod.notifyDigestFailure({
+        period: args.period,
+        totalRanges: ranges.length,
+        failedRanges: failed,
+        sampleError: firstError,
+      });
+      log({
+        level: "info",
+        event: "failure_alert_sent",
+        period: args.period,
+        failed,
+        total: ranges.length,
+      });
+    } catch (err) {
+      log({
+        level: "warn",
+        event: "failure_alert_skipped",
+        period: args.period,
+        err: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
 }
 
 main()

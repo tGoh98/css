@@ -56,7 +56,7 @@ export function ItemCard({ feedItem }: { feedItem: FeedItem }) {
             href={`/item/${item.id}`}
             className="text-muted-foreground hover:text-foreground hover:underline"
           >
-            Details & notes
+            Details
           </Link>
           <a
             href={item.url}

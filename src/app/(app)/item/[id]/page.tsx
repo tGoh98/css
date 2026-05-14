@@ -1,13 +1,9 @@
 import { notFound } from "next/navigation";
 import Link from "next/link";
-import { eq } from "drizzle-orm";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { Separator } from "@/components/ui/separator";
-import { ItemNotes } from "@/components/item-notes";
 import { PriorityBadge } from "@/components/priority-badge";
-import { db } from "@/db";
-import { itemNotes } from "@/db/schema";
 import { fetchItemById } from "@/lib/queries/items";
 import { relativeTime } from "@/lib/relative-time";
 
@@ -21,12 +17,6 @@ export default async function ItemDetailPage({ params }: { params: Promise<{ id:
   const fi = await fetchItemById(itemId);
   if (!fi) notFound();
   const { item, classification, source } = fi;
-
-  const [noteRow] = await db
-    .select()
-    .from(itemNotes)
-    .where(eq(itemNotes.itemId, itemId))
-    .limit(1);
 
   return (
     <div className="flex flex-col gap-6">
@@ -78,12 +68,6 @@ export default async function ItemDetailPage({ params }: { params: Promise<{ id:
           >
             Open original ↗
           </a>
-        </CardContent>
-      </Card>
-
-      <Card>
-        <CardContent className="pt-6">
-          <ItemNotes itemId={item.id} initial={noteRow?.bodyMd ?? ""} />
         </CardContent>
       </Card>
     </div>

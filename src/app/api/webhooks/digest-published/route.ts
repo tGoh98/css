@@ -1,3 +1,4 @@
+import { timingSafeEqual } from "node:crypto";
 import { NextResponse } from "next/server";
 import { notifyDigest } from "@/notify";
 
@@ -9,7 +10,8 @@ import { notifyDigest } from "@/notify";
  * credentials of its own; this Vercel Function holds the keys and fans out.
  *
  * Body: { digestId: number | string, secret: string }
- * Auth: `secret` must match env `DIGEST_WEBHOOK_SECRET`.
+ * Auth: `secret` must match env `DIGEST_WEBHOOK_SECRET`. Compared in
+ * constant time via crypto.timingSafeEqual.
  */
 export async function POST(request: Request): Promise<NextResponse> {
   const expected = process.env.DIGEST_WEBHOOK_SECRET;
@@ -27,7 +29,10 @@ export async function POST(request: Request): Promise<NextResponse> {
     return NextResponse.json({ error: "Invalid JSON body" }, { status: 400 });
   }
 
-  if (!body.secret || body.secret !== expected) {
+  const provided = body.secret ?? "";
+  const a = Buffer.from(provided, "utf8");
+  const b = Buffer.from(expected, "utf8");
+  if (a.length !== b.length || !timingSafeEqual(a, b)) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 

@@ -1,6 +1,5 @@
 import { NextResponse } from "next/server";
 import { desc, eq, sql } from "drizzle-orm";
-import { auth } from "@/lib/auth";
 import { db } from "@/db";
 import { itemClassifications, items, sources } from "@/db/schema";
 
@@ -9,14 +8,19 @@ import { itemClassifications, items, sources } from "@/db/schema";
  *
  * Postgres FTS over title + snippet + full_text + classifier one_line.
  * Returns up to 20 results, newest first within the tsquery match set.
+ *
+ * Public — the rest of the site is unauthenticated read-only display of
+ * the same data, so there's no point gating search.
  */
 export async function GET(req: Request) {
-  const session = await auth();
-  if (!session?.user) return NextResponse.json({ error: "unauthorized" }, { status: 401 });
-
   const url = new URL(req.url);
   const q = (url.searchParams.get("q") ?? "").trim();
   if (!q) return NextResponse.json({ hits: [] });
+  // Cheap DoS bound — Postgres FTS handles long queries fine but no point
+  // letting attackers send 1MB of tsquery garbage every request.
+  if (q.length > 200) {
+    return NextResponse.json({ error: "query too long" }, { status: 400 });
+  }
 
   const rows = await db
     .select({

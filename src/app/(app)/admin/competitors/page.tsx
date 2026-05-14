@@ -1,3 +1,4 @@
+import { notFound } from "next/navigation";
 import { revalidatePath } from "next/cache";
 import { and, eq } from "drizzle-orm";
 import { Badge } from "@/components/ui/badge";
@@ -14,8 +15,17 @@ import {
 } from "@/components/ui/table";
 import { db } from "@/db";
 import { sources } from "@/db/schema";
+import { auth } from "@/lib/auth";
+import { isAdminUsername } from "@/lib/env";
 
 export const dynamic = "force-dynamic";
+
+/** Non-owners get a 404 — don't leak that the route even exists. */
+async function requireAdmin(): Promise<void> {
+  const session = await auth();
+  const username = (session?.user as { username?: string } | undefined)?.username;
+  if (!isAdminUsername(username)) notFound();
+}
 
 type CompetitorConfig = {
   method?: "google-news" | "rss" | "github-releases";
@@ -36,6 +46,7 @@ async function listCompetitors() {
 
 async function addCompetitor(formData: FormData) {
   "use server";
+  await requireAdmin();
   const name = String(formData.get("name") ?? "").trim();
   const method = String(formData.get("method") ?? "").trim();
   const brand = String(formData.get("brand") ?? name).trim();
@@ -76,6 +87,7 @@ async function addCompetitor(formData: FormData) {
 
 async function toggleEnabled(formData: FormData) {
   "use server";
+  await requireAdmin();
   const id = Number(formData.get("id"));
   const current = String(formData.get("current") ?? "true") === "true";
   await db.update(sources).set({ enabled: !current }).where(eq(sources.id, id));
@@ -84,6 +96,7 @@ async function toggleEnabled(formData: FormData) {
 
 async function deleteCompetitor(formData: FormData) {
   "use server";
+  await requireAdmin();
   const id = Number(formData.get("id"));
   await db
     .delete(sources)
@@ -99,6 +112,7 @@ function describeMethod(cfg: CompetitorConfig): string {
 }
 
 export default async function CompetitorsAdminPage() {
+  await requireAdmin();
   const rows = await listCompetitors();
 
   return (

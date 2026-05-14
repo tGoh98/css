@@ -52,3 +52,21 @@ export function getAllowlist(): string[] {
     .map((s) => s.trim().toLowerCase())
     .filter(Boolean);
 }
+
+/**
+ * The GitHub username (lowercased) that's allowed to see admin-only UI
+ * (e.g. /admin/competitors). Defaults to the first entry in AUTH_ALLOWLIST,
+ * so the project owner is admin by default with no extra config.
+ */
+export function getAdminUsername(): string | null {
+  const explicit = process.env.AUTH_ADMIN?.trim().toLowerCase();
+  if (explicit) return explicit;
+  return getAllowlist()[0] ?? null;
+}
+
+/** Whether the given (already-lowercased) username has admin access. */
+export function isAdminUsername(username: string | null | undefined): boolean {
+  if (!username) return false;
+  const admin = getAdminUsername();
+  return admin !== null && admin === username.toLowerCase();
+}

@@ -36,13 +36,21 @@ export const authConfig = {
       if (!login) return false;
       return allowlist.includes(login.toLowerCase());
     },
-    async jwt({ token, user }) {
+    async jwt({ token, user, profile }) {
       if (user) token.id = user.id;
+      // Persist GitHub login on the token so server components / middleware
+      // can gate admin-only UI (e.g. /admin/competitors) on it without
+      // querying the DB.
+      const login = (profile as { login?: string } | undefined)?.login;
+      if (login) token.username = login.toLowerCase();
       return token;
     },
     async session({ session, token }) {
       if (session.user && token?.id) {
         (session.user as { id?: string }).id = token.id as string;
+      }
+      if (session.user && token?.username) {
+        (session.user as { username?: string }).username = token.username as string;
       }
       return session;
     },

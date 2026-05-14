@@ -22,7 +22,35 @@ Personal web app that aggregates and synthesizes Figma-related signal — news, 
 ## Conventions
 
 - TypeScript strict mode
-- Secrets in `.env.local` (gitignored)
 - One ingest poller per source, kept thin and idempotent
 - Database access through thin query functions, no heavy ORM
 - Don't add features beyond what's in ARCHITECTURE.md without discussing first
+
+## Secrets and sensitive data — STRICT
+
+This is a public GitHub repo. **Anything pushed is exposed forever** — rewriting history is not sufficient because the values have already been served to viewers, archives, and search indexes. Treat every commit like a billboard.
+
+**NEVER commit:**
+- Real API keys, tokens, passwords, OAuth client secrets, webhook secrets, session secrets
+- Real database connection strings (anything with a live password/host)
+- Personally identifying information beyond what's already public (emails, phone numbers, addresses, IDs)
+- Private keys / certificates (`.pem`, `.key`, service account JSON)
+- Any file matching `.env`, `.env.local`, `.env.*.local` (these are gitignored; never `git add -f` them)
+- Output of `vercel env pull`, `neon connect`, or similar — these dump real values
+
+**Always use placeholders in committed files:**
+- `.env.local.example` — empty values only (`KEY=`)
+- Docs / READMEs — placeholders like `<paste-from-Vercel>` or `<your-key-here>`
+- Code — read from `process.env.X`, never hardcode
+
+**Before every commit:** check the diff. Would any value here leak a secret if a stranger forked the repo? Run `git diff --staged` and scan for high-entropy strings, URLs with passwords, anything that looks like a token prefix (`sk-ant-`, `re_`, `gh[pos]_`, `npg_`, etc.).
+
+**Don't paste real secret values in chat messages either** — Claude Code transcripts persist. The Neon password was leaked once on 2026-05-13 and had to be rotated. Don't repeat.
+
+**If a secret IS committed (or pushed, or chat-pasted):**
+1. Rotate it IMMEDIATELY at the source (Neon, Anthropic, Resend, GitHub OAuth App, etc.).
+2. Update Vercel env vars + local `~/.config/css/digest.env` with the new value.
+3. Note the rotation in the next commit message so future-you knows.
+4. Do NOT try to scrub git history with rebase/filter-branch — assume the old value is exposed and burn it.
+
+When adding a new secret env var, update all of: Vercel env vars, `.env.local.example` (empty placeholder), `.env.local` (locally only), and any reference docs (with placeholder).

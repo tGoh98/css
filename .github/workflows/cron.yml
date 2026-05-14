@@ -1,0 +1,60 @@
+name: Cron
+
+# Drives the Vercel cron endpoints from GitHub Actions. We use GH Actions
+# instead of Vercel Cron because Vercel Hobby caps cron frequency at daily.
+# Public repos get unlimited Actions minutes; this workflow uses ~17 hours/mo.
+#
+# Required secret on the repo: CRON_SECRET (must match the Vercel env var of
+# the same name). Configure at: github.com/tGoh98/css/settings/secrets/actions
+
+on:
+  schedule:
+    - cron: '*/15 * * * *'   # tick-15m: news + reddit + hn
+    - cron: '0 * * * *'      # tick-hourly: figma-blog + sec + competitors + analyst + cluster
+  workflow_dispatch:
+    inputs:
+      endpoint:
+        description: 'Endpoint to poke (manual run)'
+        type: choice
+        options:
+          - tick-15m
+          - tick-hourly
+        default: tick-15m
+
+permissions: {}
+
+concurrency:
+  group: cron-${{ github.event.schedule || inputs.endpoint }}
+  cancel-in-progress: false
+
+jobs:
+  poke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Pick endpoint from schedule
+        id: which
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "endpoint=${{ inputs.endpoint }}" >> "$GITHUB_OUTPUT"
+          elif [ "${{ github.event.schedule }}" = "0 * * * *" ]; then
+            echo "endpoint=tick-hourly" >> "$GITHUB_OUTPUT"
+          else
+            echo "endpoint=tick-15m" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Poke ${{ steps.which.outputs.endpoint }}
+        env:
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+          APP_URL: https://css-lake-three.vercel.app
+        run: |
+          set -e
+          if [ -z "$CRON_SECRET" ]; then
+            echo "::error::CRON_SECRET secret not set. Add at repo Settings → Secrets and variables → Actions."
+            exit 1
+          fi
+          URL="$APP_URL/api/cron/${{ steps.which.outputs.endpoint }}"
+          echo "Hitting $URL"
+          curl -fsS --max-time 90 \
+            -H "Authorization: Bearer $CRON_SECRET" \
+            "$URL"

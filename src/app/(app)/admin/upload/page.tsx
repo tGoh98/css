@@ -19,7 +19,7 @@ import { auth } from "@/lib/auth";
 import { isAdminUsername } from "@/lib/env";
 import {
   extractDocument,
-  sourceForDocType,
+  manualUploadSource,
   type DocExtraction,
 } from "@/ai/doc-extract";
 import { ensureSource, insertAndClassify, emptyResult } from "@/ingest/_shared";
@@ -27,13 +27,11 @@ import { ensureSource, insertAndClassify, emptyResult } from "@/ingest/_shared";
 export const dynamic = "force-dynamic";
 
 const MAX_BYTES = 12 * 1024 * 1024;
-const UPLOAD_KINDS = [
-  "analyst-report",
-  "transcript",
-  "presentation",
-  "report",
-  "upload",
-] as const;
+// All manual uploads now route to a single source with kind="upload"
+// (see sourceForDocType in src/ai/doc-extract.ts). The historical per-doc-type
+// kinds aren't included here — there are no remaining items in those source
+// rows after the 2026-05-14 consolidation.
+const UPLOAD_KINDS = ["upload"] as const;
 
 async function requireAdmin(): Promise<void> {
   const session = await auth();
@@ -117,7 +115,7 @@ async function uploadDocument(formData: FormData): Promise<void> {
   }
 
   const extraction = await extractDocument(b64);
-  const { name: sourceName, kind: sourceKind } = sourceForDocType(extraction.doc_type);
+  const { name: sourceName, kind: sourceKind } = manualUploadSource();
   const sourceId = await ensureSource({
     name: sourceName,
     kind: sourceKind,

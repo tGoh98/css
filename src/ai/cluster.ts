@@ -24,14 +24,11 @@ export const CLUSTER_MODEL = "claude-haiku-4-5";
  * as its own row in /feed regardless of whether a scraped news item covers
  * the same event. Cluster grouping was hiding uploads behind the more recent
  * news representative.
+ *
+ * All manual uploads now route to kind="upload" after the 2026-05-14
+ * source consolidation.
  */
-const UPLOAD_SOURCE_KINDS = [
-  "analyst-report",
-  "transcript",
-  "presentation",
-  "report",
-  "upload",
-];
+const UPLOAD_SOURCE_KINDS = ["upload"];
 
 const CLUSTER_SYSTEM = `You are the topic-clustering engine for a Figma-focused news aggregator.
 

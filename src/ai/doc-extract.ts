@@ -170,24 +170,16 @@ export async function extractDocument(pdfBase64: string): Promise<DocExtraction>
 }
 
 /**
- * Source-row metadata for a given detected doc_type. Each doc_type gets its
- * own source row so per-source filtering on the Feed (and the Analyst tab's
- * kind-based query) work without special-casing.
+ * Source-row metadata for a manual upload. All doc_types route to the SAME
+ * source row ("Manual uploads", kind="upload") — the detected doc_type is
+ * preserved separately in raw_json.extraction.doc_type for display purposes,
+ * but doesn't fan out to per-kind source rows. This keeps the source filter
+ * on /feed coherent (one row to pick) and avoids accumulating disused source
+ * rows over time as new doc_types get added.
  */
-export function sourceForDocType(t: DocType): {
+export function manualUploadSource(): {
   name: string;
   kind: string;
 } {
-  switch (t) {
-    case "analyst-report":
-      return { name: "Analyst reports (manual upload)", kind: "analyst-report" };
-    case "transcript":
-      return { name: "Transcripts (manual upload)", kind: "transcript" };
-    case "presentation":
-      return { name: "Presentations (manual upload)", kind: "presentation" };
-    case "report":
-      return { name: "Research reports (manual upload)", kind: "report" };
-    case "other":
-      return { name: "Manual uploads (other)", kind: "upload" };
-  }
+  return { name: "Manual uploads", kind: "upload" };
 }

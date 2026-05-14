@@ -8,15 +8,15 @@
     "start": "next start",
     "lint": "eslint .",
     "db:generate": "drizzle-kit generate",
-    "db:migrate": "tsx scripts/db-migrate.ts",
+    "db:migrate": "tsx --env-file=.env.local scripts/db-migrate.ts",
     "db:push": "drizzle-kit push",
-    "seed": "tsx scripts/seed.ts",
-    "backfill:all": "tsx scripts/backfill/all.ts",
-    "backfill:sec": "tsx scripts/backfill/sec.ts",
-    "backfill:hn": "tsx scripts/backfill/hn.ts",
-    "backfill:figma-blog": "tsx scripts/backfill/figma-blog.ts",
-    "backfill:reddit": "tsx scripts/backfill/reddit.ts",
-    "backfill:competitors": "tsx scripts/backfill/competitors.ts"
+    "seed": "tsx --env-file=.env.local scripts/seed.ts",
+    "backfill:all": "tsx --env-file=.env.local scripts/backfill/all.ts",
+    "backfill:sec": "tsx --env-file=.env.local scripts/backfill/sec.ts",
+    "backfill:hn": "tsx --env-file=.env.local scripts/backfill/hn.ts",
+    "backfill:figma-blog": "tsx --env-file=.env.local scripts/backfill/figma-blog.ts",
+    "backfill:reddit": "tsx --env-file=.env.local scripts/backfill/reddit.ts",
+    "backfill:competitors": "tsx --env-file=.env.local scripts/backfill/competitors.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "0.96.0",

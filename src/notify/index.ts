@@ -193,6 +193,11 @@ export async function notifyBreaking(itemId: string | number): Promise<void> {
       return;
     }
 
+    // Historical items must never page the user — backfill jobs flag them.
+    if (row.item.backfilled) {
+      return;
+    }
+
     const channels = await enabledEmailChannels();
     if (channels.length === 0) {
       console.log("[notify] notifyBreaking: no enabled email channels");

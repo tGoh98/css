@@ -42,6 +42,11 @@ interface RssItem {
   creator?: string;
 }
 
+// Per-brand caps so adding more brands stays under Vercel's 60s function cap.
+// The classifier relevance filter will discard most off-topic items anyway.
+const MAX_ITEMS_PER_BRAND = 15;
+const PER_BRAND_CONCURRENCY = 4;
+
 async function pollGoogleNews(
   brand: string,
   query: string,
@@ -60,26 +65,32 @@ async function pollGoogleNews(
   });
   try {
     const feed = await parser.parseURL(GOOGLE_NEWS(query));
-    for (const entry of feed.items as RssItem[]) {
-      if (!entry.title || !entry.link) continue;
-      const publishedAt = entry.isoDate
-        ? new Date(entry.isoDate)
-        : entry.pubDate
-          ? new Date(entry.pubDate)
-          : new Date();
-      await insertAndClassify(
-        sourceId,
-        sourceName,
-        "competitor-news",
-        {
-          externalId: entry.guid ?? entry.link,
-          url: entry.link,
-          title: entry.title,
-          snippet: entry.contentSnippet ?? null,
-          publishedAt,
-          rawJson: { brand, query, raw: entry as unknown as Record<string, unknown> },
-        },
-        result,
+    const entries = (feed.items as RssItem[]).slice(0, MAX_ITEMS_PER_BRAND);
+    for (let i = 0; i < entries.length; i += PER_BRAND_CONCURRENCY) {
+      const batch = entries.slice(i, i + PER_BRAND_CONCURRENCY);
+      await Promise.allSettled(
+        batch.map(async (entry) => {
+          if (!entry.title || !entry.link) return;
+          const publishedAt = entry.isoDate
+            ? new Date(entry.isoDate)
+            : entry.pubDate
+              ? new Date(entry.pubDate)
+              : new Date();
+          await insertAndClassify(
+            sourceId,
+            sourceName,
+            "competitor-news",
+            {
+              externalId: entry.guid ?? entry.link,
+              url: entry.link,
+              title: entry.title,
+              snippet: entry.contentSnippet ?? null,
+              publishedAt,
+              rawJson: { brand, query, raw: entry as unknown as Record<string, unknown> },
+            },
+            result,
+          );
+        }),
       );
     }
     await markPolled(sourceId);
@@ -196,11 +207,22 @@ async function pollPenpotReleases(result: IngestResult): Promise<void> {
 export async function ingest(): Promise<IngestResult> {
   const result = emptyResult();
 
+  // Established players.
   await pollGoogleNews("Adobe", "Adobe design tool", result);
-  await pollGoogleNews("Canva", "Canva", result);
+  await pollGoogleNews("Canva", "Canva design", result);
   await pollRssBlog("Sketch", SKETCH_BLOG_RSS, result);
   await pollRssBlog("Penpot", PENPOT_BLOG_RSS, result);
   await pollPenpotReleases(result);
+
+  // AI-native challengers — newer entrants pressing on Figma's AI strategy.
+  // Queries are quoted to reduce noise; classifier relevance filter handles
+  // whatever still slips through (most matches will be dropped at <0.4).
+  await pollGoogleNews("Google Stitch", '"Google Stitch" design', result);
+  await pollGoogleNews("Claude design", '"Claude" Anthropic design tool', result);
+  await pollGoogleNews("Pencil", '"Pencil" AI design', result);
+  await pollGoogleNews("Dessn", '"Dessn" design', result);
+  await pollGoogleNews("Galileo AI", '"Galileo AI" design', result);
+  await pollGoogleNews("Uizard", "Uizard", result);
 
   return result;
 }

@@ -106,6 +106,11 @@ export default function AboutPage() {
               <strong>Competitors</strong> — same shape as Feed but scoped to
               competing tools
             </li>
+            <li>
+              <strong>Analyst</strong> — live FIG quote, analyst consensus,
+              monthly recommendation trend, and earnings beat/miss history
+              (via Finnhub)
+            </li>
           </ul>
         </CardContent>
       </Card>

@@ -1,0 +1,58 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  CSS hourly ingest poker.
+
+  Hits the Vercel /api/cron/tick-hourly endpoint, which fans out to the
+  figma-blog / sec / competitors / analyst ingesters and then runs
+  topic clustering.
+
+  Before installing:
+    1. Replace HOME_PATH below with your home directory (e.g. /Users/tgoh).
+       launchd does not expand ~ or $HOME.
+    2. Ensure ~/.config/css/digest.env has APP_URL and CRON_SECRET.
+    3. Ensure scripts/ingest-poke.sh is executable: chmod +x.
+    4. Copy to ~/Library/LaunchAgents/ and load:
+         launchctl load ~/Library/LaunchAgents/com.css.ingest-hourly.plist
+
+  See LOCAL_SETUP.md for the full walkthrough.
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.css.ingest-hourly</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/bash</string>
+    <string>/Users/tgoh/playground/css/scripts/ingest-poke.sh</string>
+    <string>tick-hourly</string>
+  </array>
+
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>HOME</key>
+    <string>HOME_PATH</string>
+  </dict>
+
+  <key>RunAtLoad</key>
+  <true/>
+
+  <key>KeepAlive</key>
+  <false/>
+
+  <!-- Every hour at minute 0, clock-aligned. -->
+  <key>StartCalendarInterval</key>
+  <dict>
+    <key>Minute</key>
+    <integer>0</integer>
+  </dict>
+
+  <key>StandardOutPath</key>
+  <string>HOME_PATH/.local/state/css/ingest-hourly-stdout.log</string>
+
+  <key>StandardErrorPath</key>
+  <string>HOME_PATH/.local/state/css/ingest-hourly-stderr.log</string>
+</dict>
+</plist>

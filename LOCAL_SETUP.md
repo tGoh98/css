@@ -1,9 +1,14 @@
-# Local Setup — Digest Worker
+# Local Setup — Digest Worker & Ingest Poker
 
-This document covers the **local** side of CSS: the `launchd`-driven digest
-worker that runs on the owner's Mac, invokes the Claude Code CLI (Sonnet 4.6
-on the Max plan), and writes summaries back to Neon. The Vercel-hosted web
-app + ingest crons are separate and not covered here.
+This document covers the **local** side of CSS, two pieces:
+
+1. **Digest worker** — `launchd` invokes the Claude Code CLI (Sonnet 4.6 on
+   the Max plan), generates daily/weekly/monthly digests, writes them to
+   Neon.
+2. **Ingest poker** — `launchd` curls the Vercel `/api/cron/tick-*` routes
+   on a 15-minute and hourly cadence. We do this on the Mac because the
+   Vercel Hobby plan caps cron frequency at *daily*; the routes themselves
+   live on Vercel.
 
 See `docs/ARCHITECTURE.md` → "AI usage" and "Scheduling" for the why.
 
@@ -44,6 +49,7 @@ cat > ~/.config/css/digest.env <<'EOF'
 DATABASE_URL=postgres://...neon...   # same value as Vercel
 APP_URL=https://css-lake-three.vercel.app
 DIGEST_WEBHOOK_SECRET=<paste-the-same-value-set-in-Vercel>
+CRON_SECRET=<paste-the-same-value-set-in-Vercel>
 EOF
 chmod 600 ~/.config/css/digest.env
 ```
@@ -52,9 +58,10 @@ Required keys:
 
 | Key | Purpose |
 |---|---|
-| `DATABASE_URL` | Neon connection string. Required. |
-| `APP_URL` | Base URL of the deployed web app. Used to ping the digest-published webhook so an email can be sent. |
-| `DIGEST_WEBHOOK_SECRET` | Shared secret with the Vercel `/api/webhooks/digest-published` route. Must match `DIGEST_WEBHOOK_SECRET` in Vercel env. |
+| `DATABASE_URL` | Neon connection string. Required by the digest worker. |
+| `APP_URL` | Base URL of the deployed web app. Used by both the digest worker (digest-published webhook) and the ingest poker (target host). |
+| `DIGEST_WEBHOOK_SECRET` | Shared secret with the Vercel `/api/webhooks/digest-published` route. Must match `DIGEST_WEBHOOK_SECRET` in Vercel env. Required by the digest worker. |
+| `CRON_SECRET` | Bearer token expected by the Vercel `/api/cron/*` routes. Must match `CRON_SECRET` in Vercel env. Required by the ingest poker. |
 
 Optional:
 
@@ -169,11 +176,74 @@ If something is wrong, the stderr logs are the place to start.
 
 ---
 
-## 6. Uninstall
+## 6. Install the ingest poker plists
+
+Two plists drive the Vercel `/api/cron/tick-*` endpoints from your Mac.
+They use `scripts/ingest-poke.sh` (a small bash script that sources the
+env file, then curls the endpoint with the `CRON_SECRET` bearer token).
+
+| Plist | Schedule | Hits | Triggers |
+|---|---|---|---|
+| `com.css.ingest-15m.plist` | every 15 min | `/api/cron/tick-15m` | news + reddit + hn |
+| `com.css.ingest-hourly.plist` | hourly (on the hour) | `/api/cron/tick-hourly` | figma-blog + sec + competitors + analyst + cluster |
+
+Install:
+
+```bash
+mkdir -p ~/Library/LaunchAgents
+mkdir -p ~/.local/state/css
+
+# Make the poke script executable (already is in the repo, but harmless).
+chmod +x /Users/tgoh/playground/css/scripts/ingest-poke.sh
+
+# Substitute HOME_PATH (launchd doesn't expand ~ / $HOME) and install.
+for p in 15m hourly; do
+  sed -e "s|HOME_PATH|$HOME|g" \
+      scripts/launchd/com.css.ingest-$p.plist \
+    > ~/Library/LaunchAgents/com.css.ingest-$p.plist
+done
+
+launchctl load ~/Library/LaunchAgents/com.css.ingest-15m.plist
+launchctl load ~/Library/LaunchAgents/com.css.ingest-hourly.plist
+```
+
+Verify:
+
+```bash
+launchctl list | grep com.css.ingest
+
+# Manual smoke test:
+/Users/tgoh/playground/css/scripts/ingest-poke.sh tick-15m
+```
+
+You should see something like:
+
+```
+2026-05-13T17:00:00Z [ingest-poke] tick=tick-15m status=200 body={"ok":true,"news":{"inserted":3,"skipped":0,"errors":[]}, ...}
+```
+
+Logs:
+
+| Path | Contents |
+|---|---|
+| `~/.local/state/css/ingest-15m-stdout.log` | poke output (one line per run) |
+| `~/.local/state/css/ingest-15m-stderr.log` | stderr (env errors, curl failures) |
+| `~/.local/state/css/ingest-hourly-{stdout,stderr}.log` | hourly job |
+
+`RunAtLoad=true` on both, so loading the plists kicks off an immediate
+first run, and missed runs while the Mac was asleep get picked up on the
+next launchd tick.
+
+---
+
+## 7. Uninstall
 
 ```bash
 launchctl unload ~/Library/LaunchAgents/com.css.digest-daily.plist
 launchctl unload ~/Library/LaunchAgents/com.css.digest-weekly.plist
 launchctl unload ~/Library/LaunchAgents/com.css.digest-monthly.plist
+launchctl unload ~/Library/LaunchAgents/com.css.ingest-15m.plist
+launchctl unload ~/Library/LaunchAgents/com.css.ingest-hourly.plist
 rm ~/Library/LaunchAgents/com.css.digest-*.plist
+rm ~/Library/LaunchAgents/com.css.ingest-*.plist
 ```

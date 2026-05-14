@@ -14,7 +14,30 @@ import {
   type IngestResult,
 } from "./_shared";
 
-const SUBREDDITS = ["Figma", "stocks", "wallstreetbets", "investing", "design"];
+// r/Figma is the action-figure subreddit (Levi/Erwin etc.). The actual
+// Figma design-tool community is r/FigmaDesign. Plus broader design and
+// financial subs that occasionally discuss Figma as a company.
+const SUBREDDITS = [
+  // Direct + adjacent design communities
+  "FigmaDesign",
+  "design",
+  "UI_Design",
+  "userexperience",
+  "web_design",
+  // Financial / investing chatter relevant to FIG the stock
+  "stocks",
+  "StockMarket",
+  "wallstreetbets",
+  "investing",
+  "ValueInvesting",
+  "SecurityAnalysis",
+  "IPO",
+];
+
+// Per-sub cap + classifier concurrency so the route fits under Vercel's 60s
+// function cap. Mirrors news.ts and competitors.ts.
+const MAX_ITEMS_PER_SUB = 10;
+const CLASSIFY_CONCURRENCY = 5;
 
 interface RedditListing {
   data: {
@@ -59,29 +82,34 @@ export async function ingest(): Promise<IngestResult> {
       continue;
     }
 
-    const children = listing.data?.children ?? [];
-    for (const c of children) {
-      const d = c.data;
-      const permalink = `https://www.reddit.com${d.permalink}`;
-      await insertAndClassify(
-        sourceId,
-        "Reddit search (Figma)",
-        "reddit",
-        {
-          externalId: d.name, // e.g. "t3_abc123" — globally unique on Reddit
-          url: permalink,
-          title: d.title,
-          snippet: (d.selftext ?? "").slice(0, 1500) || null,
-          author: d.author ?? null,
-          publishedAt: new Date(d.created_utc * 1000),
-          rawJson: {
-            subreddit: d.subreddit,
-            score: d.score ?? null,
-            num_comments: d.num_comments ?? null,
-            external_url: d.url,
-          },
-        },
-        result,
+    const children = (listing.data?.children ?? []).slice(0, MAX_ITEMS_PER_SUB);
+    for (let i = 0; i < children.length; i += CLASSIFY_CONCURRENCY) {
+      const batch = children.slice(i, i + CLASSIFY_CONCURRENCY);
+      await Promise.allSettled(
+        batch.map(async (c) => {
+          const d = c.data;
+          const permalink = `https://www.reddit.com${d.permalink}`;
+          await insertAndClassify(
+            sourceId,
+            "Reddit search (Figma)",
+            "reddit",
+            {
+              externalId: d.name, // e.g. "t3_abc123" — globally unique on Reddit
+              url: permalink,
+              title: d.title,
+              snippet: (d.selftext ?? "").slice(0, 1500) || null,
+              author: d.author ?? null,
+              publishedAt: new Date(d.created_utc * 1000),
+              rawJson: {
+                subreddit: d.subreddit,
+                score: d.score ?? null,
+                num_comments: d.num_comments ?? null,
+                external_url: d.url,
+              },
+            },
+            result,
+          );
+        }),
       );
     }
   }

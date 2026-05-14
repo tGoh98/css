@@ -14,7 +14,22 @@
 
 import { classifyAndStore, ensureSource, insertBackfilledItem, parseFlags, sleep } from "./_common";
 
-const SUBS = ["Figma", "stocks", "wallstreetbets", "investing", "design"];
+// r/Figma is the action-figure subreddit, not the design tool. The actual
+// Figma community is r/FigmaDesign. See src/ingest/reddit.ts for the rationale.
+const SUBS = [
+  "FigmaDesign",
+  "design",
+  "UI_Design",
+  "userexperience",
+  "web_design",
+  "stocks",
+  "StockMarket",
+  "wallstreetbets",
+  "investing",
+  "ValueInvesting",
+  "SecurityAnalysis",
+  "IPO",
+];
 const QUERY = "Figma";
 const UA = "Mozilla/5.0 (compatible; CSS-Backfill/0.1; by /u/css-tool)";
 

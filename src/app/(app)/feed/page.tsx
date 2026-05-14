@@ -32,7 +32,8 @@ export default async function FeedPage({ searchParams }: { searchParams: SearchP
 
   const [feedItems, sources] = await Promise.all([
     fetchFeed(
-      { sourceId, priority, since, q },
+      // Hide routine competitor chatter from the main Feed — Figma signal first.
+      { sourceId, priority, since, q, competitorPriorityFloor: "notable" },
       { limit: PAGE_SIZE + 1, offset, groupByCluster: true },
     ),
     listSources(),

@@ -39,6 +39,13 @@ export type FeedFilter = {
   q?: string;
   /** Restrict to bookmarked items only. */
   onlyBookmarked?: boolean;
+  /**
+   * When set, items from sources where `category = 'competitor'` are only
+   * included if their classifier priority is at or above this floor. Core
+   * sources are unaffected. Used by the Feed tab to keep the main signal
+   * on Figma — competitor routine chatter is hidden.
+   */
+  competitorPriorityFloor?: "notable" | "breaking";
 };
 
 const baseSelect = {
@@ -71,6 +78,18 @@ function buildWhere(filter: FeedFilter) {
   }
   if (filter.onlyBookmarked) {
     conds.push(sql`${bookmarks.itemId} IS NOT NULL`);
+  }
+  if (filter.competitorPriorityFloor) {
+    const allowed =
+      filter.competitorPriorityFloor === "notable"
+        ? ["notable", "breaking"]
+        : ["breaking"];
+    conds.push(
+      sql`(${sources.category} <> 'competitor' OR ${itemClassifications.priority} IN (${sql.join(
+        allowed.map((p) => sql`${p}`),
+        sql`, `,
+      )}))`,
+    );
   }
   return conds.length > 0 ? and(...conds) : undefined;
 }

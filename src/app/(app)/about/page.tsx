@@ -78,6 +78,13 @@ export default function AboutPage() {
             to Postgres. Daily at 09:00, weekly Mondays, monthly the 1st —
             with catch-up on Mac wake.
           </p>
+          <p>
+            <strong>Topic clustering</strong> runs every 30 minutes — Haiku
+            groups recent items by what they&apos;re actually about, so the
+            Feed collapses ten near-duplicate stories about the same earnings
+            release into a single card with a &ldquo;+9 similar&rdquo; badge.
+            Saves you scrolling past the same news five times.
+          </p>
         </CardContent>
       </Card>
 

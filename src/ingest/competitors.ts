@@ -26,10 +26,10 @@ import {
 const GOOGLE_NEWS = (q: string) =>
   `https://news.google.com/rss/search?q=${encodeURIComponent(q)}&hl=en-US&gl=US&ceid=US:en`;
 
-// TODO: verify URL — Sketch may not actually publish RSS at this path.
-const SKETCH_BLOG_RSS = "https://www.sketch.com/blog/feed/";
-// TODO: verify URL — Penpot blog feed not confirmed; this was the documented guess.
-const PENPOT_BLOG_RSS = "https://penpot.app/blog/feed.xml";
+// Verified 2026-05-14: Sketch publishes an Atom feed at feed.xml, not /feed/.
+const SKETCH_BLOG_RSS = "https://www.sketch.com/blog/feed.xml";
+// Verified 2026-05-14: penpot.app/blog/feed/ 301s → /blog/rss/.
+const PENPOT_BLOG_RSS = "https://penpot.app/blog/rss/";
 const PENPOT_GH_RELEASES = "https://api.github.com/repos/penpot/penpot/releases";
 
 interface RssItem {

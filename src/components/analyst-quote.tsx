@@ -56,7 +56,7 @@ export function AnalystQuote({
                     {fmtUsd(quote.d)} ({fmtPct(quote.dp)})
                   </span>
                 </div>
-                <dl className="mt-3 grid grid-cols-2 gap-x-4 gap-y-1 text-xs">
+                <dl className="mt-3 grid grid-cols-[auto_1fr] gap-x-4 gap-y-1 text-xs">
                   <dt className="text-muted-foreground">Open</dt>
                   <dd className="text-right tabular-nums">{fmtUsd(quote.o)}</dd>
                   <dt className="text-muted-foreground">Prev close</dt>
@@ -87,7 +87,7 @@ export function AnalystQuote({
                 <div className="text-xs text-muted-foreground">
                   Q{next.quarter} {next.year} · {hourLabel(next.hour)}
                 </div>
-                <dl className="mt-3 grid grid-cols-2 gap-x-4 gap-y-1 text-xs">
+                <dl className="mt-3 grid grid-cols-[auto_1fr] gap-x-4 gap-y-1 text-xs">
                   <dt className="text-muted-foreground">EPS estimate</dt>
                   <dd className="text-right tabular-nums">{fmtUsd(next.epsEstimate, 3)}</dd>
                   <dt className="text-muted-foreground">Revenue estimate</dt>

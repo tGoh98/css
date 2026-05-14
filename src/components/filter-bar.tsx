@@ -71,7 +71,7 @@ export function FilterBar({
               value={current}
               onChange={(e) => setParam(f.key, e.target.value)}
               className={cn(
-                "h-7 rounded-md border border-input bg-transparent px-2 text-xs shadow-xs outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50",
+                "h-9 sm:h-7 rounded-md border border-input bg-transparent px-2 text-xs shadow-xs outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50",
               )}
             >
               {f.options.map((o) => (

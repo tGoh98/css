@@ -22,22 +22,33 @@ export async function NavBar() {
 
   return (
     <header className="border-b border-border bg-background">
-      <div className="mx-auto flex max-w-6xl items-center gap-8 px-6 py-4">
-        <Link href="/feed" className="text-sm font-semibold tracking-tight">
-          Claudy Simple Server
+      <div className="mx-auto flex max-w-6xl items-center gap-3 sm:gap-8 px-3 sm:px-6 py-3 sm:py-4">
+        <Link
+          href="/feed"
+          className="shrink-0 text-sm font-semibold tracking-tight"
+          aria-label="Claudy Simple Server"
+        >
+          <span className="hidden sm:inline">Claudy Simple Server</span>
+          <span className="sm:hidden">CSS</span>
         </Link>
-        <nav className="flex items-center gap-1 text-sm">
+        {/* Horizontal-scrollable tab row on narrow viewports so the 6–7
+            tabs never wrap or push the SearchCommand off-screen. */}
+        <nav className="-mx-1 flex flex-1 items-center gap-0.5 overflow-x-auto px-1 text-sm scrollbar-none sm:gap-1">
           {tabs.map((tab) => (
             <Link
               key={tab.href}
               href={tab.href}
-              className="rounded-md px-3 py-1.5 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+              className="shrink-0 rounded-md px-2 py-1.5 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground sm:px-3"
             >
               {tab.label}
             </Link>
           ))}
         </nav>
-        <SearchCommand />
+        {/* SearchCommand is keyboard-driven (⌘K); hide on touch viewports
+            where it's not usable and just takes up width. */}
+        <div className="hidden sm:block">
+          <SearchCommand />
+        </div>
       </div>
     </header>
   );

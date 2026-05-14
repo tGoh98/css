@@ -1,4 +1,6 @@
+import Link from "next/link";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { FilterBar } from "@/components/filter-bar";
 import { listDigests } from "@/lib/queries/digests";
@@ -7,7 +9,9 @@ import { relativeTime } from "@/lib/relative-time";
 
 export const dynamic = "force-dynamic";
 
-type SearchParams = Promise<{ period?: string }>;
+const PAGE_SIZE = 10;
+
+type SearchParams = Promise<{ period?: string; page?: string }>;
 
 const PERIOD_LABEL: Record<string, string> = {
   day: "Daily",
@@ -19,8 +23,21 @@ export default async function DigestsPage({ searchParams }: { searchParams: Sear
   const sp = await searchParams;
   const period =
     sp.period === "day" || sp.period === "week" || sp.period === "month" ? sp.period : undefined;
+  const page = Math.max(1, Number(sp.page) || 1);
+  const offset = (page - 1) * PAGE_SIZE;
 
-  const rows = await listDigests(period, 30);
+  // Over-fetch by one to detect "has next" without a count query.
+  const rows = await listDigests(period, PAGE_SIZE + 1, offset);
+  const hasNext = rows.length > PAGE_SIZE;
+  const visible = hasNext ? rows.slice(0, PAGE_SIZE) : rows;
+
+  function pageHref(targetPage: number): string {
+    const params = new URLSearchParams();
+    if (sp.period) params.set("period", sp.period);
+    if (targetPage > 1) params.set("page", String(targetPage));
+    const qs = params.toString();
+    return qs ? `/digests?${qs}` : "/digests";
+  }
 
   return (
     <div>
@@ -28,7 +45,8 @@ export default async function DigestsPage({ searchParams }: { searchParams: Sear
         <div>
           <h1 className="text-xl font-semibold tracking-tight">Digests</h1>
           <p className="text-xs text-muted-foreground">
-            Scheduled AI summaries — daily, weekly, monthly
+            Scheduled AI summaries — daily, weekly, monthly · sorted newest first
+            {page > 1 ? ` · page ${page}` : ""}
           </p>
         </div>
       </div>
@@ -51,13 +69,23 @@ export default async function DigestsPage({ searchParams }: { searchParams: Sear
         ]}
       />
 
-      {rows.length === 0 ? (
+      {visible.length === 0 ? (
         <div className="rounded-lg border border-dashed border-border p-10 text-center text-sm text-muted-foreground">
-          No digests yet. The local digest worker runs daily at 09:00 (catch-up on next wake).
+          {page > 1 ? (
+            <>
+              No more digests on page {page}.{" "}
+              <Link href="/digests" className="underline">
+                Back to page 1
+              </Link>
+              .
+            </>
+          ) : (
+            <>No digests yet. The local digest worker runs daily at 09:00 (catch-up on next wake).</>
+          )}
         </div>
       ) : (
         <ul className="flex flex-col gap-4">
-          {rows.map((d) => (
+          {visible.map((d) => (
             <li key={d.id}>
               <Card>
                 <CardHeader>
@@ -92,6 +120,37 @@ export default async function DigestsPage({ searchParams }: { searchParams: Sear
             </li>
           ))}
         </ul>
+      )}
+
+      {(page > 1 || hasNext) && (
+        <nav
+          aria-label="Digests pagination"
+          className="mt-8 flex items-center justify-between border-t border-border pt-4"
+        >
+          <Button asChild variant="outline" size="sm" disabled={page <= 1} aria-disabled={page <= 1}>
+            {page > 1 ? (
+              <Link href={pageHref(page - 1)} prefetch={false}>
+                ← Previous
+              </Link>
+            ) : (
+              <span aria-disabled className="opacity-50">
+                ← Previous
+              </span>
+            )}
+          </Button>
+          <span className="text-xs text-muted-foreground">Page {page}</span>
+          <Button asChild variant="outline" size="sm" disabled={!hasNext} aria-disabled={!hasNext}>
+            {hasNext ? (
+              <Link href={pageHref(page + 1)} prefetch={false}>
+                Next →
+              </Link>
+            ) : (
+              <span aria-disabled className="opacity-50">
+                Next →
+              </span>
+            )}
+          </Button>
+        </nav>
       )}
     </div>
   );

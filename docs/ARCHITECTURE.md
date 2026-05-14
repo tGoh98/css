@@ -142,7 +142,7 @@ Indexes: `items(published_at desc)`, `items(source_id, published_at desc)`, `ite
 | Google News | RSS `news.google.com/rss/search?q=Figma` | 15 min | Recent only (~weeks) | Unofficial but reliable. Headlines + snippets across WSJ, Bloomberg, TechCrunch, The Verge, Barron's, etc. |
 | SEC EDGAR | `data.sec.gov/submissions/CIK*.json` + filings index | hourly | Full history (since S-1, Apr 2025) | Free, no key. Pull 10-K, 10-Q, 8-K, S-1, Form 4. Form 4 powers Insider Activity widget. |
 | Figma blog | RSS at `figma.com/blog/feed/` (or equivalent) | hourly | Last ~20 via RSS; full archive via scrape | |
-| Reddit | `reddit.com/r/<sub>/search.json?q=Figma` across r/Figma, r/stocks, r/wallstreetbets, r/investing, r/design | 15 min | Last ~few months via search | Rate-limited; Pushshift dead. |
+| Reddit | `reddit.com/r/<sub>/search.rss?q=Figma&restrict_sr=on&sort=new` across r/FigmaDesign + design subs (UI_Design, userexperience, web_design, design) + financial subs (stocks, StockMarket, wallstreetbets, investing, ValueInvesting, SecurityAnalysis, IPO) | 15 min | Last ~few months via search | See **Reddit operational note** below — Pushshift dead. |
 | Hacker News | Algolia `hn.algolia.com/api/v1/search?query=Figma` | 15 min | Full history (years) | Free, no key. Best historical community-signal source. |
 
 ### Competitor
@@ -160,6 +160,36 @@ Indexes: `items(published_at desc)`, `items(source_id, published_at desc)`, `ite
 |---|---|---|
 | Yahoo Finance | Public endpoints for analyst ratings + price targets for FIG | Free, unofficial but stable |
 | Seeking Alpha | RSS per ticker | Free tier shows headlines + summaries; full articles paywalled |
+
+## Operational notes
+
+### Reddit: data-center IP blocking (2026-05-14)
+
+**Symptom:** All `/r/<sub>/search.json` requests from the Vercel cron route returned `403 Blocked`, even though the same URLs returned 200 with the same User-Agent from local curl. Reddit aggressively filters anonymous traffic from data-center IP ranges (AWS / Vercel) regardless of UA.
+
+**Current mitigation (commit `8cd3b1f`):** `src/ingest/reddit.ts` polls `/search.rss` instead of `/search.json`. As of 2026-05-14 the RSS endpoint is *not* blocked from Vercel — a single live call returned 32 inserted / 74 skipped / 0 errors across all 12 configured subs.
+
+**How to detect a recurrence:**
+```bash
+# 1. Hit the Vercel route directly:
+curl -sS -H "Authorization: Bearer $CRON_SECRET" \
+  https://css-lake-three.vercel.app/api/cron/ingest/reddit | jq .errors
+# Look for "403 Blocked" / "429 Too Many Requests" / "fetch ... → 5xx" entries.
+
+# 2. Verify local works (rules out a global Reddit outage):
+curl -sI -H 'User-Agent: CSS-Aggregator timgoh98@gmail.com' \
+  'https://www.reddit.com/r/FigmaDesign/search.rss?q=Figma&restrict_sr=on'
+```
+
+**Fallback escalation plan if RSS also gets blocked:**
+
+1. **Local launchd ingest** (cheapest): mirror the digest-worker pattern — write `scripts/run-reddit.ts` that imports `src/ingest/reddit.ts`'s `ingest()` and runs it locally, write a `com.css.reddit-ingest.plist` that fires every 15 min from the user's Mac, and delete the `/api/cron/ingest/reddit` cron entry from the GH Actions matrix. Loses the "always-on" guarantee but the user already accepts that for digests.
+
+2. **Authenticated Reddit OAuth** (most robust, more setup): create a Reddit app at `reddit.com/prefs/apps` → "script" type → grab `client_id` and `client_secret`. Add `REDDIT_CLIENT_ID` / `REDDIT_CLIENT_SECRET` to Vercel env. Switch the ingester to fetch a bearer token via `https://www.reddit.com/api/v1/access_token` and call the OAuth `oauth.reddit.com` endpoints. Authenticated traffic gets much higher rate limits and isn't IP-filtered the same way.
+
+3. **Third-party Reddit search proxy**: Pushshift is dead. RedditWarp / async PRAW need OAuth anyway. There are some free mirrors (e.g. Reveddit) but none are production-grade.
+
+If we ever hit fallback step 1, also update this note + bump the commit reference.
 
 ## AI usage
 

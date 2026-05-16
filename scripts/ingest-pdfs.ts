@@ -1,11 +1,12 @@
 /**
- * One-shot ingest for a list of PDFs — same code path as /admin/upload's
- * uploadDocument server action, just driven from the CLI so we can batch
- * a folder of files without 13 round-trips through the browser.
+ * One-shot ingest for a list of documents (PDF or Word .docx) — same code
+ * path as /admin/upload's uploadDocument server action, just driven from the
+ * CLI so we can batch a folder of files without N round-trips through the
+ * browser.
  *
  * Usage:
  *   npm exec tsx -- --env-file=.env.local scripts/ingest-pdfs.ts \
- *     /path/to/a.pdf /path/to/b.pdf
+ *     /path/to/a.pdf /path/to/b.docx
  *
  * Skips files larger than 30 MB (Anthropic's document API caps at 32 MB).
  * Dedups by sha256 against items.external_id, so re-running on the same
@@ -79,10 +80,9 @@ async function ingestOne(path: string): Promise<void> {
     return;
   }
 
-  const b64 = bytes.toString("base64");
   let extraction: DocExtraction;
   try {
-    extraction = await extractDocument(b64);
+    extraction = await extractDocument(bytes, filename);
   } catch (err) {
     console.log(`[error] ${filename}: extract failed — ${err instanceof Error ? err.message : err}`);
     return;

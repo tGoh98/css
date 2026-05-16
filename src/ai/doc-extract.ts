@@ -1,18 +1,21 @@
 /**
  * Manual-upload document extractor.
  *
- * Single Sonnet 4.6 call: take a PDF (base64), detect what kind of document
- * it is (analyst report, earnings transcript, investor presentation, other),
- * and emit a common set of fields plus a few analyst-specific fields when
- * the doc IS an analyst report.
+ * Single Sonnet 4.6 call: take a document (PDF or Word .docx), detect what
+ * kind of document it is (analyst report, earnings transcript, investor
+ * presentation, other), and emit a common set of fields plus a few
+ * analyst-specific fields when the doc IS an analyst report.
  *
- * Sonnet (not Haiku) because these PDFs are dense — multi-column layouts,
+ * Sonnet (not Haiku) because these docs are dense — multi-column layouts,
  * tables, charts inline — and we care about accurate metadata extraction.
  *
- * Anthropic's API natively accepts PDF document blocks (no client-side
- * parser needed). The model sees both rendered pages and extracted text.
+ * PDFs go straight to Anthropic as a native document block (the model sees
+ * both rendered pages and extracted text). The API does NOT accept .docx,
+ * so for Word docs we extract the raw text with mammoth and send that as a
+ * text/plain document source instead.
  */
 import Anthropic from "@anthropic-ai/sdk";
+import mammoth from "mammoth";
 import { z } from "zod";
 
 export const DOC_EXTRACTOR_MODEL = "claude-sonnet-4-6";
@@ -44,7 +47,7 @@ const DocExtraction = z.object({
 
 export type DocExtraction = z.infer<typeof DocExtraction>;
 
-const SYSTEM_PROMPT = `You extract structured fields from a single uploaded PDF document. The user is tracking Figma, Inc. (NYSE: FIG) and its competitors, so most uploads will be FIG- or design-tools-related, but accept any topic.
+const SYSTEM_PROMPT = `You extract structured fields from a single uploaded document (a PDF, or the extracted text of a Word document). The user is tracking Figma, Inc. (NYSE: FIG) and its competitors, so most uploads will be FIG- or design-tools-related, but accept any topic.
 
 First decide doc_type — what kind of document is this:
 - "analyst-report": equity-research note from a firm like Morningstar, Goldman Sachs, JPMorgan, Argus, CFRA, MarketEdge, Seeking Alpha Pro, etc.
@@ -124,11 +127,57 @@ function client(): Anthropic {
   return cachedClient;
 }
 
+function isDocx(bytes: Buffer, filename: string): boolean {
+  if (filename.toLowerCase().endsWith(".docx")) return true;
+  // .docx is a ZIP container — sniff the "PK\x03\x04" local-file header so a
+  // mislabeled / extensionless upload still routes correctly.
+  return (
+    bytes.length >= 4 &&
+    bytes[0] === 0x50 &&
+    bytes[1] === 0x4b &&
+    bytes[2] === 0x03 &&
+    bytes[3] === 0x04
+  );
+}
+
 /**
- * Extract structured fields from a PDF.
- * `pdfBase64` must be the base64-encoded bytes (no data: prefix).
+ * Build the user-message document block. PDFs are sent as a native base64
+ * document block; .docx is text-extracted with mammoth and sent as a
+ * text/plain document source (the Anthropic API does not accept .docx).
  */
-export async function extractDocument(pdfBase64: string): Promise<DocExtraction> {
+async function documentBlock(
+  bytes: Buffer,
+  filename: string,
+): Promise<Anthropic.DocumentBlockParam> {
+  if (isDocx(bytes, filename)) {
+    const { value: text } = await mammoth.extractRawText({ buffer: bytes });
+    if (!text.trim()) {
+      throw new Error(`doc-extract: no text extracted from ${filename}`);
+    }
+    return {
+      type: "document",
+      source: { type: "text", media_type: "text/plain", data: text },
+    };
+  }
+  return {
+    type: "document",
+    source: {
+      type: "base64",
+      media_type: "application/pdf",
+      data: bytes.toString("base64"),
+    },
+  };
+}
+
+/**
+ * Extract structured fields from an uploaded document.
+ * Supports PDF and Word .docx; the kind is detected from `filename` (with a
+ * ZIP-header fallback for .docx). `bytes` is the raw file content.
+ */
+export async function extractDocument(
+  bytes: Buffer,
+  filename: string,
+): Promise<DocExtraction> {
   const resp = await client().messages.create({
     model: DOC_EXTRACTOR_MODEL,
     max_tokens: 1024,
@@ -145,14 +194,7 @@ export async function extractDocument(pdfBase64: string): Promise<DocExtraction>
       {
         role: "user",
         content: [
-          {
-            type: "document",
-            source: {
-              type: "base64",
-              media_type: "application/pdf",
-              data: pdfBase64,
-            },
-          },
+          await documentBlock(bytes, filename),
           {
             type: "text",
             text: "Detect the document type and extract fields via the emit tool.",

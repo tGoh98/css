@@ -84,10 +84,18 @@ async function uploadDocument(formData: FormData): Promise<void> {
 
   const file = formData.get("file");
   if (!(file instanceof File) || file.size === 0) {
-    throw new Error("Please choose a PDF file to upload.");
+    throw new Error("Please choose a PDF or Word (.docx) file to upload.");
   }
-  if (file.type !== "application/pdf" && !file.name.toLowerCase().endsWith(".pdf")) {
-    throw new Error(`Only PDF files are supported (got ${file.type || "unknown"}).`);
+  const name = file.name.toLowerCase();
+  const isPdf = file.type === "application/pdf" || name.endsWith(".pdf");
+  const isDocx =
+    file.type ===
+      "application/vnd.openxmlformats-officedocument.wordprocessingml.document" ||
+    name.endsWith(".docx");
+  if (!isPdf && !isDocx) {
+    throw new Error(
+      `Only PDF and Word (.docx) files are supported (got ${file.type || "unknown"}).`,
+    );
   }
   if (file.size > MAX_BYTES) {
     throw new Error(
@@ -97,10 +105,9 @@ async function uploadDocument(formData: FormData): Promise<void> {
 
   const bytes = Buffer.from(await file.arrayBuffer());
   const sha256 = createHash("sha256").update(bytes).digest("hex");
-  const b64 = bytes.toString("base64");
 
   // De-dup by content hash *before* the Sonnet call, so re-uploading the
-  // same PDF is free.
+  // same file is free.
   const externalId = `sha256:${sha256}`;
   const dup = await db
     .select({ id: items.id })
@@ -114,7 +121,7 @@ async function uploadDocument(formData: FormData): Promise<void> {
     return;
   }
 
-  const extraction = await extractDocument(b64);
+  const extraction = await extractDocument(bytes, file.name);
   const { name: sourceName, kind: sourceKind } = manualUploadSource();
   const sourceId = await ensureSource({
     name: sourceName,
@@ -236,16 +243,16 @@ export default async function UploadAdminPage() {
             className="grid gap-3"
           >
             <label className="grid gap-1 text-xs">
-              <span className="font-medium">PDF file</span>
+              <span className="font-medium">PDF or Word (.docx) file</span>
               <input
                 type="file"
                 name="file"
-                accept="application/pdf,.pdf"
+                accept="application/pdf,.pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,.docx"
                 required
                 className="rounded-md border border-input bg-transparent px-3 py-1.5 text-sm file:mr-3 file:rounded file:border-0 file:bg-accent file:px-2 file:py-1 file:text-xs file:font-medium"
               />
               <span className="text-muted-foreground">
-                Max {MAX_BYTES / 1024 / 1024} MB per file. PDFs only.
+                Max {MAX_BYTES / 1024 / 1024} MB per file. PDF or Word .docx.
               </span>
             </label>
             <div>

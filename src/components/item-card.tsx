@@ -30,10 +30,15 @@ export function ItemCard({ feedItem }: { feedItem: FeedItem }) {
               {relativeTime(item.publishedAt)}
             </span>
             {item.author ? <span>· {item.author}</span> : null}
-            {showClusterBadge ? (
-              <Badge variant="ghost" className="text-[10px]">
-                +{(clusterCount ?? 1) - 1} similar
-              </Badge>
+            {showClusterBadge && item.clusterId ? (
+              <Link href={`/cluster/${item.clusterId}`} className="hover:opacity-80">
+                <Badge
+                  variant="ghost"
+                  className="cursor-pointer text-[10px] hover:underline"
+                >
+                  +{(clusterCount ?? 1) - 1} similar
+                </Badge>
+              </Link>
             ) : null}
           </div>
           {isExternal ? (

@@ -188,6 +188,38 @@ export async function fetchItemById(id: number): Promise<FeedItem | null> {
   return { ...row, bookmarked: Boolean(row.bookmarked) };
 }
 
+/**
+ * All items in a cluster, most-recent first, plus the cluster row itself.
+ * Powers the `/cluster/[id]` page reached from the "+N similar" badge.
+ * Returns null when the cluster doesn't exist or has no members.
+ */
+export async function fetchClusterById(
+  clusterId: number,
+): Promise<{ cluster: ClusterRow; items: FeedItem[] } | null> {
+  const [cluster] = await db
+    .select()
+    .from(itemClusters)
+    .where(eq(itemClusters.id, clusterId))
+    .limit(1);
+  if (!cluster) return null;
+
+  const rows = await db
+    .select(baseSelect)
+    .from(items)
+    .leftJoin(itemClassifications, eq(itemClassifications.itemId, items.id))
+    .leftJoin(sources, eq(sources.id, items.sourceId))
+    .leftJoin(itemClusters, eq(itemClusters.id, items.clusterId))
+    .leftJoin(bookmarks, eq(bookmarks.itemId, items.id))
+    .where(eq(items.clusterId, clusterId))
+    .orderBy(desc(items.publishedAt));
+  if (rows.length === 0) return null;
+
+  return {
+    cluster,
+    items: rows.map((r) => ({ ...r, bookmarked: Boolean(r.bookmarked) })),
+  };
+}
+
 export async function searchItems(q: string, limit = 20): Promise<FeedItem[]> {
   if (!q.trim()) return [];
   return fetchFeed({ q }, { limit, groupByCluster: false });

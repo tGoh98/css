@@ -18,7 +18,7 @@ export async function listDigests(
   const q = db
     .select()
     .from(digests)
-    .orderBy(desc(digests.periodStart))
+    .orderBy(desc(digests.periodStart), desc(digests.generatedAt))
     .limit(limit)
     .offset(offset);
   if (period) return q.where(eq(digests.period, period));

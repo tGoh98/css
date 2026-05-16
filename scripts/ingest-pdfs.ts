@@ -1,16 +1,17 @@
 /**
- * One-shot ingest for a list of documents (PDF or Word .docx) — same code
- * path as /admin/upload's uploadDocument server action, just driven from the
- * CLI so we can batch a folder of files without N round-trips through the
- * browser.
+ * One-shot, LOCAL-ONLY ingest for a list of documents (PDF or Word .docx).
+ * This is now the *only* way to ingest documents — extraction runs via the
+ * local `claude --print` CLI (Max-plan capacity, $0 API), so the deployed
+ * app has no upload path. Run it on the owner's Mac where the Claude Code
+ * CLI is installed.
  *
  * Usage:
  *   npm exec tsx -- --env-file=.env.local scripts/ingest-pdfs.ts \
  *     /path/to/a.pdf /path/to/b.docx
  *
- * Skips files larger than 30 MB (Anthropic's document API caps at 32 MB).
- * Dedups by sha256 against items.external_id, so re-running on the same
- * folder is a free no-op for already-ingested files.
+ * Skips files larger than 30 MB (sanity guard — Claude's Read tool is slow
+ * on very large PDFs). Dedups by sha256 against items.external_id, so
+ * re-running on the same folder is a free no-op for already-ingested files.
  */
 import { createHash } from "node:crypto";
 import { readFileSync, statSync } from "node:fs";
@@ -82,7 +83,7 @@ async function ingestOne(path: string): Promise<void> {
 
   let extraction: DocExtraction;
   try {
-    extraction = await extractDocument(bytes, filename);
+    extraction = await extractDocument(path);
   } catch (err) {
     console.log(`[error] ${filename}: extract failed — ${err instanceof Error ? err.message : err}`);
     return;

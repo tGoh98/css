@@ -1,4 +1,3 @@
-import { createHash } from "node:crypto";
 import { notFound } from "next/navigation";
 import { revalidatePath } from "next/cache";
 import { and, desc, eq, inArray } from "drizzle-orm";
@@ -17,18 +16,12 @@ import { db } from "@/db";
 import { items, sources } from "@/db/schema";
 import { auth } from "@/lib/auth";
 import { isAdminUsername } from "@/lib/env";
-import {
-  extractDocument,
-  manualUploadSource,
-  type DocExtraction,
-} from "@/ai/doc-extract";
-import { ensureSource, insertAndClassify, emptyResult } from "@/ingest/_shared";
+import { type DocExtraction } from "@/ai/doc-extract";
 
 export const dynamic = "force-dynamic";
 
-const MAX_BYTES = 12 * 1024 * 1024;
-// All manual uploads now route to a single source with kind="upload"
-// (see sourceForDocType in src/ai/doc-extract.ts). The historical per-doc-type
+// All manual uploads route to a single source with kind="upload"
+// (see manualUploadSource in src/ai/doc-extract.ts). The historical per-doc-type
 // kinds aren't included here — there are no remaining items in those source
 // rows after the 2026-05-14 consolidation.
 const UPLOAD_KINDS = ["upload"] as const;
@@ -49,126 +42,6 @@ type UploadRawJson = {
     uploadedBy?: string;
   };
 };
-
-function buildTitle(x: DocExtraction): string {
-  if (x.doc_type === "analyst-report") {
-    const ticker = x.ticker ? `${x.ticker} ` : "";
-    const rating = x.rating ?? "n/a";
-    const pt =
-      x.price_target != null
-        ? `, ${x.target_currency ?? "USD"} ${x.price_target.toFixed(2)} PT`
-        : "";
-    return `${x.firm ?? "Analyst"}: ${ticker}${rating}${pt}`.trim();
-  }
-  // For other types, prefer the doc's own title verbatim.
-  return x.title;
-}
-
-function buildSnippet(x: DocExtraction): string {
-  const points = x.key_points.length > 0 ? `\n\n• ${x.key_points.join("\n• ")}` : "";
-  return `${x.summary}${points}`;
-}
-
-function parseDocDate(s: string | null): Date {
-  if (!s) return new Date();
-  const d = new Date(s);
-  if (!isNaN(d.getTime())) return d;
-  return new Date();
-}
-
-async function uploadDocument(formData: FormData): Promise<void> {
-  "use server";
-  await requireAdmin();
-  const session = await auth();
-  const uploadedBy = (session?.user as { username?: string } | undefined)?.username;
-
-  const file = formData.get("file");
-  if (!(file instanceof File) || file.size === 0) {
-    throw new Error("Please choose a PDF or Word (.docx) file to upload.");
-  }
-  const name = file.name.toLowerCase();
-  const isPdf = file.type === "application/pdf" || name.endsWith(".pdf");
-  const isDocx =
-    file.type ===
-      "application/vnd.openxmlformats-officedocument.wordprocessingml.document" ||
-    name.endsWith(".docx");
-  if (!isPdf && !isDocx) {
-    throw new Error(
-      `Only PDF and Word (.docx) files are supported (got ${file.type || "unknown"}).`,
-    );
-  }
-  if (file.size > MAX_BYTES) {
-    throw new Error(
-      `File is ${(file.size / 1024 / 1024).toFixed(1)} MB; the limit is ${MAX_BYTES / 1024 / 1024} MB.`,
-    );
-  }
-
-  const bytes = Buffer.from(await file.arrayBuffer());
-  const sha256 = createHash("sha256").update(bytes).digest("hex");
-
-  // De-dup by content hash *before* the Sonnet call, so re-uploading the
-  // same file is free.
-  const externalId = `sha256:${sha256}`;
-  const dup = await db
-    .select({ id: items.id })
-    .from(items)
-    .where(eq(items.externalId, externalId))
-    .limit(1);
-  if (dup.length > 0) {
-    revalidatePath("/admin/upload");
-    revalidatePath("/analyst");
-    revalidatePath("/feed");
-    return;
-  }
-
-  const extraction = await extractDocument(bytes, file.name);
-  const { name: sourceName, kind: sourceKind } = manualUploadSource();
-  const sourceId = await ensureSource({
-    name: sourceName,
-    kind: sourceKind,
-    category: "core",
-    configJson: { mode: "manual-upload", docType: extraction.doc_type },
-  });
-
-  const title = buildTitle(extraction);
-  const snippet = buildSnippet(extraction);
-  const rawJson: UploadRawJson = {
-    extraction,
-    upload: {
-      filename: file.name,
-      bytes: file.size,
-      sha256,
-      uploadedAt: new Date().toISOString(),
-      uploadedBy,
-    },
-  };
-
-  const result = emptyResult();
-  await insertAndClassify(
-    sourceId,
-    sourceName,
-    sourceKind,
-    {
-      externalId,
-      url: `upload:${sha256}`,
-      title,
-      snippet,
-      fullText: `${extraction.summary}\n\n${extraction.key_points.join("\n")}`,
-      author: extraction.author ?? null,
-      publishedAt: parseDocDate(extraction.date),
-      rawJson: rawJson as unknown as Record<string, unknown>,
-    },
-    result,
-  );
-
-  if (result.errors.length > 0) {
-    throw new Error(`Upload classified with errors: ${result.errors.join("; ")}`);
-  }
-
-  revalidatePath("/admin/upload");
-  revalidatePath("/analyst");
-  revalidatePath("/feed");
-}
 
 async function deleteUpload(formData: FormData): Promise<void> {
   "use server";
@@ -221,48 +94,23 @@ export default async function UploadAdminPage() {
   return (
     <div className="mx-auto max-w-4xl space-y-6">
       <div>
-        <h1 className="text-xl font-semibold tracking-tight">Manual upload</h1>
+        <h1 className="text-xl font-semibold tracking-tight">Manual uploads</h1>
         <p className="mt-1 text-sm text-muted-foreground">
-          Drop any PDF — analyst report, earnings transcript, investor deck,
-          industry research, conference talk. Sonnet detects the document type
-          and extracts title / author / date / summary / key points (plus
-          rating &amp; price target for analyst reports), then routes it into
-          the appropriate feed. The original PDF is{" "}
-          <span className="font-medium">not stored</span> — only the extraction.
+          Ingest is <span className="font-medium">local-only</span> — document
+          extraction runs through the local Claude Code CLI (Max-plan capacity,
+          no API cost), so the deployed app cannot ingest documents. PDF and
+          Word <code>.docx</code> are supported. From the owner&apos;s Mac:
+        </p>
+        <pre className="mt-2 overflow-x-auto rounded-md bg-muted px-3 py-2 text-xs">
+          npm exec tsx -- --env-file=.env.local scripts/ingest-pdfs.ts
+          /path/to/a.pdf /path/to/b.docx
+        </pre>
+        <p className="mt-2 text-sm text-muted-foreground">
+          This page is now read-only for managing what&apos;s already ingested.
+          The original file is <span className="font-medium">not stored</span> —
+          only the extraction.
         </p>
       </div>
-
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-base">Upload a document</CardTitle>
-        </CardHeader>
-        <CardContent>
-          <form
-            action={uploadDocument}
-            encType="multipart/form-data"
-            className="grid gap-3"
-          >
-            <label className="grid gap-1 text-xs">
-              <span className="font-medium">PDF or Word (.docx) file</span>
-              <input
-                type="file"
-                name="file"
-                accept="application/pdf,.pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,.docx"
-                required
-                className="rounded-md border border-input bg-transparent px-3 py-1.5 text-sm file:mr-3 file:rounded file:border-0 file:bg-accent file:px-2 file:py-1 file:text-xs file:font-medium"
-              />
-              <span className="text-muted-foreground">
-                Max {MAX_BYTES / 1024 / 1024} MB per file. PDF or Word .docx.
-              </span>
-            </label>
-            <div>
-              <Button type="submit" size="sm">
-                Upload &amp; extract
-              </Button>
-            </div>
-          </form>
-        </CardContent>
-      </Card>
 
       <Card>
         <CardHeader>

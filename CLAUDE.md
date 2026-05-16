@@ -26,6 +26,16 @@ Personal web app that aggregates and synthesizes Figma-related signal — news, 
 - Database access through thin query functions, no heavy ORM
 - Don't add features beyond what's in ARCHITECTURE.md without discussing first
 
+## Ingesting a PDF / document
+
+Local-only by design. Run on the owner's Mac (has the Claude Code CLI + Max plan):
+
+```
+npm exec tsx -- --env-file=.env.local scripts/ingest-pdfs.ts /abs/path/a.pdf /abs/path/b.docx
+```
+
+Supports PDF and Word `.docx`. Extraction goes through the local `claude --print` CLI ($0 Max-plan capacity), not the Anthropic API: PDFs are read by local Claude via its Read tool; `.docx` is text-extracted with `mammoth` and inlined in the prompt. **Never re-introduce an Anthropic-API doc-extractor or a web upload form** — both were removed deliberately on 2026-05-15 to kill a Sonnet API cost spike (see ARCHITECTURE decision log). `/admin/upload` is a read-only management view (list/delete only). Pass absolute paths; SHA-256 dedups re-runs.
+
 ## Secrets and sensitive data — STRICT
 
 This is a public GitHub repo. **Anything pushed is exposed forever** — rewriting history is not sufficient because the values have already been served to viewers, archives, and search indexes. Treat every commit like a billboard.

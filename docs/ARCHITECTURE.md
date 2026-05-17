@@ -49,7 +49,7 @@ GH Actions    ─►│ Ingest workers (one per source)  │
                 └──────────────┬───────────────────┘
                                │ for each new item:
                                │   1. dedup by (source_id, external_id)
-                               │   2. Haiku classifier (relevance + priority + one_line) — API
+                               │   2. Haiku classifier (relevance + priority + one_line) — API, batched
                                │   3. drop if relevance < 0.5
                                │   4. for Form 4s: fetch + parse XML, enrich raw_json
                                │   5. assign to topic cluster
@@ -126,6 +126,16 @@ notification_channels
 notifications_sent
   item_id, channel_id, sent_at  -- dedup so we don't notify twice
 
+ai_usage
+  id, job ('classify'|'cluster'), model, item_id nullable, source_kind nullable,
+  input_tokens, cache_read_input_tokens, cache_write_input_tokens,
+  output_tokens, created_at
+  -- One row per Anthropic API call from the classifier/clusterer. Cost
+  -- attribution: the billing CSV only splits by model+token_type+date and
+  -- can't tell classify vs cluster apart. Best-effort write — a failure
+  -- here never breaks ingest. (Batched classify calls log item_id/
+  -- source_kind null since one call covers many mixed-source items.)
+
 users
   id, email, github_id, github_username, created_at
   -- public site; only AUTH_ADMIN (or AUTH_ALLOWLIST[0]) sees /admin/*
@@ -134,7 +144,7 @@ users
 --   watchlists, bookmarks, item_notes  (left in case we revive saved-views)
 ```
 
-Indexes: `items(published_at desc)`, `items(source_id, published_at desc)`, `items(cluster_id)`, `item_classifications(priority)`, GIN index on items full_text for FTS, `chart_points(symbol, t desc)`.
+Indexes: `items(published_at desc)`, `items(source_id, published_at desc)`, `items(cluster_id)`, `item_classifications(priority)`, GIN index on items full_text for FTS, `chart_points(symbol, t desc)`, `ai_usage(created_at desc)`, `ai_usage(job)`.
 
 **Form 4 enrichment.** Items from SEC sources where `raw_json.filing_type IN ('4', '4/A')` carry parsed insider-transaction fields merged into `raw_json`: `reporter_name`, `reporter_role`, `is_officer/is_director/is_ten_percent_owner`, `transaction_code`, `transaction` ('purchase'|'sale'|'other'), `shares` (signed net), `value` (USD). Populated by `src/ingest/sec-form4.ts` (cheerio xmlMode parser) on first ingest; backfilled by `npm run backfill:sec-form4-enrich` for legacy rows.
 
@@ -211,12 +221,13 @@ If we ever hit fallback step 1, also update this note + bump the commit referenc
 
 ## AI usage
 
-- **Ingest-time classifier (Anthropic API, Haiku 4.5).** One call per new item via `tool_use` with a forced schema, prompt-cached system message. JSON output: `{ relevance: 0–1, priority: routine|notable|breaking, one_line: string }`. Drop (delete the items row) if `relevance < 0.5`. Priority rubric biases toward 'routine' (default) — only true material events escalate to 'breaking'. Prompt includes an explicit security note instructing Haiku that the Title/URL/Snippet are untrusted third-party data and must not be followed as instructions. ~$0.0005/item.
-- **Topic clustering (Anthropic API, Haiku 4.5).** Periodic job (every 30 min) re-clusters last-24h items by semantic similarity; picks a representative title. Small cost.
+- **Ingest-time classifier (Anthropic API, Haiku 4.5).** `tool_use` with a forced schema. JSON per item: `{ relevance: 0–1, priority: routine|notable|breaking, one_line: string }`. Drop (delete the items row) if `relevance < 0.5`. Priority rubric biases toward 'routine' (default) — only true material events escalate to 'breaking'. Prompt includes an explicit security note instructing Haiku that the source/URL/title/snippet are untrusted third-party data and must not be followed as instructions, plus an isolation note so one item's text can't influence another's score in a batch. **Batched, not per-item:** `classifyItem` keeps a per-item signature but concurrent calls (pollers classify in concurrent chunks) are coalesced into one Haiku request, amortizing the ~1k-token system prompt across many items — the dominant cost. Failed/omitted items fall back to individual retries so a bad batch never loses classifications. No prompt caching: Haiku 4.5's cache floor is ~4096 tokens (empirically verified), well above this prompt, so `cache_control` would be a silent no-op — batching is the lever instead. ~$0.0001/item batched (was ~$0.0005 per-item).
+- **Topic clustering (Anthropic API, Haiku 4.5).** Periodic job (every 30 min) re-clusters last-24h items by semantic similarity; picks a representative title. One call per run (all candidates in a single request); small cost. No `cache_control` — single call/run, nothing to reuse, and the prompt is below the cache floor anyway.
+- **Cost attribution (`ai_usage` table).** Both Haiku consumers log per-call token usage (input / cache read / cache write / output) tagged with job, so spend can be split classify-vs-cluster and the real post-batching cost measured — the billing CSV can't do this.
 - **Manual-upload doc extraction (local Claude Code CLI, Sonnet 4.6, Max plan).** `scripts/ingest-pdfs.ts` (run on the owner's Mac) spawns `claude --print --output-format json`; for **PDF** it adds `--allowedTools Read --permission-mode bypassPermissions` and Claude Code's Read tool renders pages visually + extracts text, for **Word .docx** it text-extracts with `mammoth` and inlines the text in the prompt (no tool needed). Emits the structured-fields JSON validated by the Zod schema in `src/ai/doc-extract.ts`. $0 marginal (Max plan). There is **no API path** — ingest is local-only; `/admin/upload` is now a read-only management view.
 - **Scheduled digests (local Claude Code CLI, Opus 4.7, Max plan).** A `launchd` job on the user's Mac runs `scripts/run-digest.ts` daily / weekly / monthly. The script connects to Neon, pulls items for the period, **also pulls aggregated Form 4 transactions** for the same window, builds a structured prompt (item lists grouped by priority + a one-line-per-row insider-transaction preamble), invokes `claude --print --model claude-opus-4-7 --output-format json`, and writes `summary_md` back to `digests`. The prompt requires exactly five H2 sections: `## Breaking`, `## Notable`, `## Investor highlights`, `## Routine`, `## What to watch`. The Investor highlights section cites specific share counts and dollar values from the Form 4 preamble. After insert, the worker POSTs to `/api/webhooks/digest-published` with `DIGEST_WEBHOOK_SECRET` (constant-time compared) so the Vercel function can fan out via Resend. Catch-up: each run checks the recent window for missing digests and generates them — so a daily digest missed because the Mac was asleep at 09:00 gets generated whenever the Mac next runs the job. Cost: $0 marginal (uses Max plan capacity).
 
-**Estimated monthly cost:** $3–5 API (classifier + clustering) + $0 for digests and manual-upload extraction (both Max plan, local) + $0 for notifications (Resend free tier).
+**Estimated monthly cost:** ~$1–2 API (classifier + clustering, post-batching; was $3–5 — classifier was ~75% of spend as uncached per-item Haiku calls) + $0 for digests and manual-upload extraction (both Max plan, local) + $0 for notifications (Resend free tier). Verify against `ai_usage` after a real ingest run.
 
 ## Scheduling
 
@@ -260,7 +271,7 @@ Local digest jobs use `StartCalendarInterval` + the script's catch-up logic so m
   - `CRON_SECRET` (must match the Vercel env var of the same name; drives the cron workflow)
 - **Secrets (local, for digest worker):** all in `~/.config/css/digest.env` (outside the repo, mode 600):
   - `DATABASE_URL`, `APP_URL`, `DIGEST_WEBHOOK_SECRET`, `CLAUDE_BIN` (optional)
-- **Cost:** $0 infra (Vercel + Neon + Resend free tiers), ~$3–5/mo Anthropic API, $0 digests (Max plan)
+- **Cost:** $0 infra (Vercel + Neon + Resend free tiers), ~$1–2/mo Anthropic API (post-batching), $0 digests (Max plan)
 
 ## Backfill strategy
 
@@ -298,6 +309,7 @@ One-shot script per source: `npm run backfill:<source>`. Marks items with `backf
 | 2026-05-14 | Digest worker: `withRetry` on DB calls + DB-outage-fallback failure alert | The morning of 2026-05-14, the 09:00 PDT launchd run failed all 14 catch-up ranges within 600 ms because the first connect-attempt errored and there was no retry. Two-part fix: (1) `withRetry()` wraps every DB call (digestExists, fetchItemsForPeriod, fetchInsiderForPeriod, insertDigest) in a 3-attempt 500 ms / 2 s / 8 s back-off; (2) `notifyDigestFailure()` uses an `emailChannelsForAlert()` helper that falls back to `RESEND_TO_EMAIL` env when the DB channel lookup fails — because the most common digest-failure cause IS the DB being unreachable, and the alert can't depend on the same DB. Returns `{sent, channels}` so the worker logs `failure_alert_sent` only when an email actually went out. |
 | 2026-05-15 | Cluster drill-in route `/cluster/[id]` | The "+N similar" badge was static — clustered items were unreachable from the UI (feed hardcodes `groupByCluster: true`, no toggle). Badge now links to `/cluster/[id]`, which lists every member of the cluster (most-recent first) via `fetchClusterById()`, reusing `ItemCard`. Members render with their real titles and no recursive badge. |
 | 2026-05-15 | Doc extraction moved to local Claude Code (Max plan); uploads local-only; .docx preserved | API-key cost analysis showed the Sonnet doc-extractor was the single largest spike (~$5.7 on 2026-05-13's bulk earnings ingest) — every upload sent a full base64 PDF to Sonnet at $3/1M. `extractDocument(filePath)` now spawns the local `claude --print` CLI ($0 Max-plan capacity), same pattern as the digest worker: **PDF** is read by local Claude via its Read tool (same multimodal fidelity); **Word .docx** keeps the `mammoth` text-extraction added the same day, but the text is now inlined into the local-CLI prompt instead of sent as an API text/plain block. The `/admin/upload` web form + `uploadDocument` server action were removed (deployed app has no Claude CLI and we don't want an API path), leaving a read-only management view; `scripts/ingest-pdfs.ts` is the sole ingest entry point. Signature changed `(pdfBase64)`/`(bytes, filename)` → `(filePath)`. Classifier + clustering stay on API Haiku (low latency, runs on Vercel cron where no local CLI exists). |
+| 2026-05-17 | Classifier batched (coalesced Haiku calls) + `ai_usage` cost-attribution table; no prompt caching | Follow-up cost analysis (CSV 05-11→05-17) showed the classifier was ~75% of API spend: one uncached Haiku call per item re-sending the ~1k-token system prompt. **Prompt caching does not help here** — live probes proved Haiku 4.5's cache floor is ~4096 tokens (not the 2048 of Haiku 3/3.5), and below it `cache_control` is a silent no-op (this is why the pre-existing `cache_control` never engaged — zero cache rows in billing). Instead, concurrent `classifyItem` calls (pollers already classify in concurrent chunks) are coalesced into one batched request; per-item signature/result unchanged so no poller edits. Measured ~85% input-token cut at batch 12 (191 vs ~1250 tok/item); failed/omitted ids retried individually so a bad batch never loses classifications; cross-item prompt-injection isolation verified. Dead `cache_control` removed from `cluster.ts`. New `ai_usage` table (migration 0002) logs per-call tokens by job so the real saving is measurable (billing CSV can't split classify vs cluster). |
 | 2026-05-14 | Manual uploads collapse to single source row + exempted from clustering | Previous design routed each detected `doc_type` (analyst-report / transcript / presentation / report / other) to its own `sources` row. Resulted in cluttered per-source filters on /feed and uploads getting hidden behind scraped news representatives in cluster groups. `manualUploadSource()` now always returns `{name: "Manual uploads", kind: "upload"}`; the detected doc_type is preserved in `raw_json.extraction.doc_type` for display. `clusterRecent()` excludes `kind='upload'` from candidate items so user-uploaded PDFs always show as their own row in /feed. |
 | 2026-05-14 | Per-digest permalink route `/digests/[id]` | Sharing a digest required pointing someone at the whole list. New route renders a single digest standalone (same body + sources footer as the list view) with shareable URL `https://css-lake-three.vercel.app/digests/N`. Card titles on /digests and the home dashboard's Recent digests now link to the permalink. Item-detail page also renders `full_text` as Markdown HTML when `raw_json.render === "markdown"` — forward-compatible for any rich-content manual-upload row. |
 | 2026-05-14 | Event-period digests authored manually | The scheduled digest worker produces day/week/month digests; for one-off analytical digests (earnings deep-dives, incident post-mortems), `scripts/insert-digest.ts` writes a row with `period='event'` directly to the `digests` table. The `/digests` filter UI gained an "Event" option. First use: Q1 FY2026 comparative deep-dive (id=36) referencing 15 source PDFs from /admin/upload. |

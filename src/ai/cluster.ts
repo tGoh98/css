@@ -13,6 +13,7 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { and, eq, gte, inArray, isNull, not, sql } from "drizzle-orm";
 import { z } from "zod";
+import { logAiUsage } from "@/ai/usage";
 import { db } from "@/db";
 import { itemClassifications, itemClusters, items, sources } from "@/db/schema";
 
@@ -152,11 +153,17 @@ export async function clusterRecent(): Promise<ClusterRunResult> {
     const resp = await client().messages.create({
       model: CLUSTER_MODEL,
       max_tokens: 4096,
-      system: [{ type: "text", text: CLUSTER_SYSTEM, cache_control: { type: "ephemeral" } }],
+      // No cache_control: clustering is one call per daily run with nothing to
+      // reuse within a TTL, and CLUSTER_SYSTEM (~220 tokens) is far below
+      // Haiku's 2048-token cache floor anyway, so it would be a silent no-op.
+      system: [{ type: "text", text: CLUSTER_SYSTEM }],
       tools: [CLUSTER_TOOL],
       tool_choice: { type: "tool", name: "cluster" },
       messages: [{ role: "user", content: `Items:\n${userPayload}` }],
     });
+
+    void logAiUsage({ job: "cluster", model: CLUSTER_MODEL, usage: resp.usage });
+
     const toolBlock = resp.content.find((b) => b.type === "tool_use");
     if (!toolBlock || toolBlock.type !== "tool_use") {
       result.errors.push("no tool_use block in cluster response");

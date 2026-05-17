@@ -15,6 +15,13 @@
       "when": 1778739600126,
       "tag": "0001_loving_moondragon",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1779038444963,
+      "tag": "0002_windy_sentry",
+      "breakpoints": true
     }
   ]
 }

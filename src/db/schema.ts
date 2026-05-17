@@ -75,6 +75,34 @@ export const itemClassifications = pgTable(
   (table) => [index("item_classifications_priority_idx").on(table.priority)],
 );
 
+/**
+ * Per-call Anthropic usage log. One row per API call from the ingest-time
+ * classifier and the topic-clusterer, so we can attribute spend by job /
+ * source and confirm prompt-cache hit rate from the `cache_read`/`cache_write`
+ * columns (the billing CSV only splits by model+token_type+date and can't
+ * tell classify vs cluster apart). Best-effort: a failed insert here must
+ * never break ingest.
+ */
+export const aiUsage = pgTable(
+  "ai_usage",
+  {
+    id: serial("id").primaryKey(),
+    job: text("job").notNull(), // 'classify'|'cluster'
+    model: text("model").notNull(),
+    itemId: integer("item_id"), // null for cluster runs (operate on a batch)
+    sourceKind: text("source_kind"), // null for cluster runs
+    inputTokens: integer("input_tokens").default(0).notNull(),
+    cacheReadInputTokens: integer("cache_read_input_tokens").default(0).notNull(),
+    cacheWriteInputTokens: integer("cache_write_input_tokens").default(0).notNull(),
+    outputTokens: integer("output_tokens").default(0).notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [
+    index("ai_usage_created_idx").on(table.createdAt.desc()),
+    index("ai_usage_job_idx").on(table.job),
+  ],
+);
+
 export const itemClusters = pgTable("item_clusters", {
   id: serial("id").primaryKey(),
   representativeTitle: text("representative_title").notNull(),

@@ -18,7 +18,10 @@ export async function listDigests(
   const q = db
     .select()
     .from(digests)
-    .orderBy(desc(digests.periodStart), desc(digests.generatedAt))
+    // Order by the period the digest *covers*, not when it starts: a weekly's
+    // period_start is the Monday, which sinks it below every daily in the same
+    // week. period_end ranks a weekly alongside the last day it covers.
+    .orderBy(desc(digests.periodEnd), desc(digests.generatedAt))
     .limit(limit)
     .offset(offset);
   if (period) return q.where(eq(digests.period, period));

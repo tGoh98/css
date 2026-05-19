@@ -2,10 +2,10 @@
  * Best-effort Anthropic usage logging.
  *
  * Writes one `ai_usage` row per API call so spend can be attributed by job
- * (classify vs cluster) and source, and so prompt-cache effectiveness is
- * visible (cache_read should dominate once the cached prefix clears Haiku's
- * 2048-token floor). Any failure here is swallowed — logging must never
- * break ingest.
+ * (classify vs cluster) and source, and so batch coalescing is visible
+ * (item_count = items covered by the call; for batched classify this is the
+ * batch size). Any failure here is swallowed — logging must never break
+ * ingest.
  */
 import type Anthropic from "@anthropic-ai/sdk";
 import { db } from "@/db";
@@ -17,6 +17,7 @@ interface LogAiUsageArgs {
   usage: Anthropic.Usage;
   itemId?: number | null;
   sourceKind?: string | null;
+  itemCount?: number;
 }
 
 export async function logAiUsage({
@@ -25,6 +26,7 @@ export async function logAiUsage({
   usage,
   itemId = null,
   sourceKind = null,
+  itemCount = 1,
 }: LogAiUsageArgs): Promise<void> {
   try {
     await db.insert(aiUsage).values({
@@ -32,6 +34,7 @@ export async function logAiUsage({
       model,
       itemId,
       sourceKind,
+      itemCount,
       inputTokens: usage.input_tokens ?? 0,
       cacheReadInputTokens: usage.cache_read_input_tokens ?? 0,
       cacheWriteInputTokens: usage.cache_creation_input_tokens ?? 0,

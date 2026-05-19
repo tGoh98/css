@@ -91,6 +91,9 @@ export const aiUsage = pgTable(
     model: text("model").notNull(),
     itemId: integer("item_id"), // null for cluster runs (operate on a batch)
     sourceKind: text("source_kind"), // null for cluster runs
+    // Items covered by this single API call. For batched classify this is the
+    // batch size — the metric that tells coalescing-working from not.
+    itemCount: integer("item_count").default(1).notNull(),
     inputTokens: integer("input_tokens").default(0).notNull(),
     cacheReadInputTokens: integer("cache_read_input_tokens").default(0).notNull(),
     cacheWriteInputTokens: integer("cache_write_input_tokens").default(0).notNull(),

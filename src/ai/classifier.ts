@@ -270,7 +270,12 @@ async function callModel(inputs: ClassifyInput[]): Promise<Map<number, Classifie
     ],
   });
 
-  void logAiUsage({ job: "classify", model: CLASSIFIER_MODEL, usage: resp.usage });
+  void logAiUsage({
+    job: "classify",
+    model: CLASSIFIER_MODEL,
+    usage: resp.usage,
+    itemCount: inputs.length,
+  });
 
   const toolBlock = resp.content.find((b) => b.type === "tool_use");
   if (!toolBlock || toolBlock.type !== "tool_use") {

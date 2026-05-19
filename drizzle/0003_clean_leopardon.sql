@@ -1,0 +1,1 @@
+ALTER TABLE "ai_usage" ADD COLUMN "item_count" integer DEFAULT 1 NOT NULL;

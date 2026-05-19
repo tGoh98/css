@@ -162,7 +162,12 @@ export async function clusterRecent(): Promise<ClusterRunResult> {
       messages: [{ role: "user", content: `Items:\n${userPayload}` }],
     });
 
-    void logAiUsage({ job: "cluster", model: CLUSTER_MODEL, usage: resp.usage });
+    void logAiUsage({
+      job: "cluster",
+      model: CLUSTER_MODEL,
+      usage: resp.usage,
+      itemCount: rows.length,
+    });
 
     const toolBlock = resp.content.find((b) => b.type === "tool_use");
     if (!toolBlock || toolBlock.type !== "tool_use") {

@@ -22,6 +22,13 @@
       "when": 1779038444963,
       "tag": "0002_windy_sentry",
       "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1779167919463,
+      "tag": "0003_clean_leopardon",
+      "breakpoints": true
     }
   ]
 }

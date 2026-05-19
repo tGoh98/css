@@ -504,7 +504,7 @@ interface ClaudeResult {
   modelLabel: string;
 }
 
-async function invokeClaude(prompt: string): Promise<ClaudeResult> {
+async function invokeClaudeOnce(prompt: string): Promise<ClaudeResult> {
   // We try JSON output first; if the CLI version doesn't support it we fall
   // back to plain text. The current Claude Code CLI (verified via `claude
   // --help`) supports --print, --output-format json, and --model, so the JSON
@@ -523,6 +523,23 @@ async function invokeClaude(prompt: string): Promise<ClaudeResult> {
       modelLabel: `${CLAUDE_MODEL} (via Claude Code, text fallback)`,
     };
   }
+}
+
+/**
+ * Wrap the json→text invocation in withRetry. The 2026-05-19 incident showed
+ * the CLI can exit 1 with empty stderr on a transient Max-plan limit / backend
+ * hiccup, and the json attempt plus its immediate text fallback hit the same
+ * wall back-to-back (~27 min burned, the day's digest permanently dropped
+ * until the next nightly catch-up). A spaced retry gives the limit time to
+ * clear. Each failing CLI attempt already costs minutes, so the 30s→120s
+ * back-off is effectively free relative to the work it guards.
+ */
+async function invokeClaude(prompt: string): Promise<ClaudeResult> {
+  return withRetry("invokeClaude", () => invokeClaudeOnce(prompt), {
+    attempts: 3,
+    baseMs: 30_000,
+    factor: 4,
+  });
 }
 
 function runClaudeOnce(args: string[], prompt: string): Promise<string> {
@@ -780,6 +797,7 @@ async function main(): Promise<void> {
   let skipNoItems = 0;
   let failed = 0;
   let firstError: string | null = null;
+  const failedPeriods: string[] = [];
   for (const range of ranges) {
     const s = await generateOne(db, schema, args.period, range);
     if (s.kind === "written") written += 1;
@@ -787,6 +805,7 @@ async function main(): Promise<void> {
     else if (s.kind === "skip_no_items") skipNoItems += 1;
     else {
       failed += 1;
+      failedPeriods.push(range.periodStart.toISOString().slice(0, 10));
       if (firstError === null) firstError = s.err;
     }
   }
@@ -809,6 +828,10 @@ async function main(): Promise<void> {
         period: args.period,
         totalRanges: ranges.length,
         failedRanges: failed,
+        written,
+        skipExists,
+        skipNoItems,
+        failedPeriods,
         sampleError: firstError,
       });
       log({

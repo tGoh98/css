@@ -367,6 +367,10 @@ export async function notifyDigestFailure(args: {
   period: "day" | "week" | "month";
   totalRanges: number;
   failedRanges: number;
+  written: number;
+  skipExists: number;
+  skipNoItems: number;
+  failedPeriods: string[];
   sampleError: string | null;
 }): Promise<{ sent: number; channels: number }> {
   try {
@@ -377,30 +381,77 @@ export async function notifyDigestFailure(args: {
     }
 
     const resend = resendClient();
-    const subject = `[CSS Digest] ${args.period} worker failed — ${args.failedRanges}/${args.totalRanges} ranges errored`;
+    const skipped = args.skipExists + args.skipNoItems;
+
+    // Most "X/14 ranges errored" alerts are a single missing day buried in a
+    // catch-up sweep where the rest already existed. The subject + body lead
+    // with the real scope (how many digests are actually missing and which
+    // dates) so the alert isn't mistaken for a full outage. Targeted re-run
+    // commands name the failed dates — far cheaper than re-sweeping --catch-up.
+    const subject =
+      `[CSS Digest] ${args.period} worker — ${args.failedRanges} range(s) failed, ` +
+      `${args.written} written, ${skipped} skipped`;
+
+    const failedList =
+      args.failedPeriods.length > 0 ? args.failedPeriods.join(", ") : "(dates not reported)";
+
+    const rerunCmds =
+      args.failedPeriods.length > 0
+        ? args.failedPeriods
+            .map(
+              (d) =>
+                `  npm exec tsx -- scripts/run-digest.ts --period ${args.period} --date ${d}`,
+            )
+            .join("\n")
+        : `  npm exec tsx -- scripts/run-digest.ts --period ${args.period} --catch-up`;
+
     const text =
-      `The ${args.period} digest worker ran but produced no new digests. ${args.failedRanges} of ${args.totalRanges} attempted ranges errored.\n\n` +
+      `The ${args.period} digest worker completed but produced no new digests.\n\n` +
+      `Scope (not a full outage — only the failed range(s) below are missing a digest):\n` +
+      `  • ${args.written} written\n` +
+      `  • ${args.skipExists} already existed\n` +
+      `  • ${args.skipNoItems} had no qualifying items\n` +
+      `  • ${args.failedRanges} errored after retries\n\n` +
+      `Failed range(s): ${failedList}\n\n` +
       (args.sampleError ? `Sample error:\n${args.sampleError}\n\n` : "") +
-      `Re-run manually with:\n  npm exec tsx -- scripts/run-digest.ts --period ${args.period} --catch-up\n\n` +
-      `If the manual re-run also fails, check ~/.config/css/digest.env (DATABASE_URL freshness, etc.) and the worker log at ~/.local/state/css/digest.log.\n`;
+      `Re-run just the failed range(s):\n${rerunCmds}\n\n` +
+      `If the re-run also fails, check ~/.config/css/digest.env (DATABASE_URL freshness, etc.) and the worker log at ~/.local/state/css/digest.log.\n`;
+
+    const rerunHtml = rerunCmds
+      .trim()
+      .split("\n")
+      .map(
+        (c) =>
+          `<div style="font-family:ui-monospace,monospace; font-size:12px; background:#f3f4f6; padding:6px 8px; border-radius:4px; margin:4px 0;">${escapeHtml(c.trim())}</div>`,
+      )
+      .join("");
+
     const html = `
       <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; line-height: 1.5;">
         <p style="margin: 0 0 12px;">
           <span style="display:inline-block; padding:2px 8px; border-radius:4px; background:#fee2e2; color:#991b1b; font-size:11px; font-weight:600; text-transform:uppercase; letter-spacing:0.05em;">Digest failure</span>
           <span style="margin-left:8px; padding:2px 8px; border-radius:4px; background:#eef2ff; color:#3730a3; font-size:11px; font-weight:600;">${escapeHtml(args.period)}</span>
         </p>
+        <p style="margin: 0 0 8px;">
+          The ${escapeHtml(args.period)} digest worker completed but produced no new digests.
+          <strong>This is not a full outage</strong> — only the failed range(s) below are missing a digest.
+        </p>
+        <ul style="margin: 0 0 12px; padding-left: 20px; color:#374151; font-size:13px;">
+          <li><strong>${args.written}</strong> written</li>
+          <li><strong>${args.skipExists}</strong> already existed</li>
+          <li><strong>${args.skipNoItems}</strong> had no qualifying items</li>
+          <li><strong>${args.failedRanges}</strong> errored after retries</li>
+        </ul>
         <p style="margin: 0 0 12px;">
-          The ${escapeHtml(args.period)} digest worker ran but produced no new digests —
-          <strong>${args.failedRanges}/${args.totalRanges}</strong> ranges errored after retries.
+          Failed range(s): <strong>${escapeHtml(failedList)}</strong>
         </p>
         ${
           args.sampleError
             ? `<details style="margin: 0 0 12px;"><summary style="cursor:pointer; color:#6b7280; font-size:12px;">Sample error</summary><pre style="margin: 6px 0 0; padding: 8px; background:#f3f4f6; border-radius:4px; font-size:11px; overflow:auto;">${escapeHtml(args.sampleError)}</pre></details>`
             : ""
         }
-        <p style="margin: 0; color:#6b7280; font-size:13px;">
-          Re-run manually: <code style="background:#f3f4f6; padding:1px 4px; border-radius:3px;">npm exec tsx -- scripts/run-digest.ts --period ${escapeHtml(args.period)} --catch-up</code>
-        </p>
+        <p style="margin: 0 0 4px; color:#6b7280; font-size:13px;">Re-run just the failed range(s):</p>
+        ${rerunHtml}
       </div>
     `;
 

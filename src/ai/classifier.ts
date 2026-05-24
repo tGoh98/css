@@ -191,7 +191,17 @@ function itemForPrompt(i: ClassifyInput) {
 // ---------------------------------------------------------------------------
 
 const MAX_BATCH = 20;
-const DEBOUNCE_MS = 40;
+// Settle window for collecting concurrent classifyItem calls into one Haiku
+// request. The pollers run `insertAndClassify` at CONCURRENCY=6 across 3
+// parallel sources, so up to ~18 calls can be in flight per tick — but each
+// one waits on a Neon insert (~30–100 ms) before enqueuing into the batcher,
+// so they don't arrive synchronously. A 40 ms window (the original value)
+// caught only 1–2 of them on average — measured avg batch was 1.79 over a
+// 7-day window, max 7. 300 ms is long enough to cover the DB-write jitter
+// without adding meaningful latency to the cron route (which already takes
+// ~10 s). Expected: avg batch climbs into the 5–10 range, cutting per-call
+// system-prompt duplication by ~50%.
+const DEBOUNCE_MS = 300;
 
 interface Pending {
   input: ClassifyInput;

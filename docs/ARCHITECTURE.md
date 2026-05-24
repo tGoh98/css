@@ -237,6 +237,20 @@ Prints five tables:
 4. **`ai_usage`, batch sizes, last 7d** — `avg_items` per call. The classifier should be coalescing concurrent requests; an avg near 1 means batching isn't engaging.
 5. **`digests`, recent + any failed** — last 40 generated digests plus anything with `summary_md IS NULL`. A missing day means the launchd job either didn't fire or `claude --print` failed all retries (see `~/.local/state/css/digest.log`).
 
+### `scripts/usage-clustering.ts` — classify-call time-clustering
+
+```bash
+npm exec tsx -- --env-file=.env.local scripts/usage-clustering.ts
+```
+
+Three histograms over the last 7 days of classify calls in `ai_usage`:
+
+1. **gap from previous call** (50 s buckets up to 600 s) — how tightly packed calls are in time. A heavy bottom bucket means almost every call lands within a minute of the previous one.
+2. **neighbours within ±5 min** — how many calls fall inside a single prompt-cache TTL window. Best-case signal for whether caching could engage.
+3. **calls-per-minute distribution** — burst sizes during active minutes.
+
+One-off analysis for the 2026-05-24 "is caching worth it?" decision; rerun after any change to classifier batching to confirm the clustering shape hasn't moved.
+
 ### `scripts/ingest-health.ts` — source freshness + classifier backlog
 
 ```bash
@@ -355,6 +369,7 @@ One-shot script per source: `npm run backfill:<source>`. Marks items with `backf
 | 2026-05-13 | Digests run via local Claude Code (Max plan), not API | Uses existing Max subscription instead of API spend; digests are batched/async and tolerate the laptop-on dependency (catch-up logic handles missed runs). Classifier + clustering stay on API for low latency. |
 | 2026-05-13 | Drop Voyage embeddings and `item_embeddings` table | No chat = no RAG = no embeddings needed. `pgvector` extension stays enabled on Neon for future use but is unused in v1. |
 | 2026-05-13 | No dedicated `ir-press` poller; rely on SEC 8-K | `investor.figma.com` is Cloudflare-gated; Q4 JSON syndication returns empty. SEC 8-K already captures every material press release with ~hours of latency. See operational note. |
+| 2026-05-24 | Classifier `DEBOUNCE_MS` 40 → 300 | The 2026-05-17 batching change set `DEBOUNCE_MS=40`, but the realised avg `item_count` over the next week was 1.79 (max 7) — almost no coalescing. Root cause: each `insertAndClassify` call awaits a Neon insert (~30–100 ms) before enqueuing into the batcher, so the 40 ms settle window only catches 1–2 of the 6-per-poller × 3-pollers concurrent calls. Bumped to 300 ms — long enough to cover the DB-write jitter while still negligible against the ~10 s cron route. `scripts/usage-clustering.ts` showed 94% of classify calls already land within 50 s of the previous one, so the calls are there to be batched; we were just settling too early. Expected impact: avg batch climbs from ~1.79 toward 5–10, cutting input tokens by ~50%. Verify with `scripts/usage-report.ts` after a few real ticks. |
 
 ## Open questions
 
@@ -363,3 +378,7 @@ None blocking v1 scope. To resolve during scaffolding:
 - Exact Figma blog RSS URL (verify `figma.com/blog/feed/` or equivalent)
 - Figma's SEC CIK (look up at first ingest run; not assigned until S-1 filed)
 - Owner's GitHub username for the auth allowlist: `tGoh98` (recorded)
+
+Deferred:
+
+- **Is prompt caching worth padding the system prompt to cross the ~4096-tok Haiku floor?** Today the classifier sends ~1.9k tokens of system prompt + tool schema per call, well below the floor, so `cache_control` is intentionally absent. `scripts/usage-clustering.ts` shows the access pattern would cache extremely well (94% of calls land within 50 s of the previous), so the *upper-bound* saving exists. Rough math at post-debounce volume (~400 calls/wk): padding system to ~4500 tok and adding `cache_control` saves ~$0.5/wk on top of the 2026-05-24 debounce bump — small. Net benefit only worthwhile if the padding is *useful content* (more rubric examples, edge-case definitions, a named-entity lexicon) rather than filler, and if the maintenance burden of a longer prompt is acceptable. Revisit if `ai_usage` shows a real classifier cost spike after the debounce bump beds in.

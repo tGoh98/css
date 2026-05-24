@@ -153,9 +153,10 @@ export async function clusterRecent(): Promise<ClusterRunResult> {
     const resp = await client().messages.create({
       model: CLUSTER_MODEL,
       max_tokens: 4096,
-      // No cache_control: clustering is one call per daily run with nothing to
-      // reuse within a TTL, and CLUSTER_SYSTEM (~220 tokens) is far below
-      // Haiku's 2048-token cache floor anyway, so it would be a silent no-op.
+      // No cache_control: clustering is one call per daily run with nothing
+      // to reuse within a TTL, and CLUSTER_SYSTEM (~220 tokens) is far below
+      // Haiku 4.5's ~4096-token cache floor (empirically verified — see the
+      // 2026-05-17 decision-log entry), so it would be a silent no-op.
       system: [{ type: "text", text: CLUSTER_SYSTEM }],
       tools: [CLUSTER_TOOL],
       tool_choice: { type: "tool", name: "cluster" },

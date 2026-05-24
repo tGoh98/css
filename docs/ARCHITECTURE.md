@@ -219,6 +219,38 @@ curl -sI -H 'User-Agent: CSS-Aggregator timgoh98@gmail.com' \
 
 If we ever hit fallback step 1, also update this note + bump the commit reference.
 
+## Ops scripts
+
+Small read-only TypeScript scripts under `scripts/` for spot-checking the system. Both connect to Neon via `DATABASE_URL` and print tables to stdout; neither writes.
+
+### `scripts/usage-report.ts` — Anthropic spend + digest history
+
+```bash
+npm exec tsx -- --env-file=.env.local scripts/usage-report.ts
+```
+
+Prints five tables:
+
+1. **`ai_usage`, last 7 days, by job+model** — `classify` vs `cluster` call counts, items covered, input/cache/output tokens. Watch `cache_read` and `cache_write`: zeros mean prompt caching is a no-op (see the Haiku cache floor note under AI usage).
+2. **`ai_usage`, last 30 days, by model** — month-scale totals for cost reconciliation against the Anthropic billing CSV.
+3. **`ai_usage`, last 24h, hourly** — when the classifier last fired. Empty 24h is only normal if Vercel crons haven't fired in the window yet.
+4. **`ai_usage`, batch sizes, last 7d** — `avg_items` per call. The classifier should be coalescing concurrent requests; an avg near 1 means batching isn't engaging.
+5. **`digests`, recent + any failed** — last 40 generated digests plus anything with `summary_md IS NULL`. A missing day means the launchd job either didn't fire or `claude --print` failed all retries (see `~/.local/state/css/digest.log`).
+
+### `scripts/ingest-health.ts` — source freshness + classifier backlog
+
+```bash
+npm exec tsx -- --env-file=.env.local scripts/ingest-health.ts
+```
+
+Prints three tables:
+
+1. **items ingested per kind, last 24h** — `news` / `reddit` / `competitor-news` etc., with the latest timestamp per kind. Zero rows means ingest hasn't fired (or every source is dead).
+2. **sources by oldest last item** — every source ordered by `MAX(fetched_at)`, with the gap. Anything older than 48h is suspect; a `NULL` last-item means the poller has never returned anything (broken URL).
+3. **classifier backlog** — items with no row in `item_classifications`. Should drain to ~0 after each tick fire; persistently nonzero means the classifier is choking.
+
+When digging into a failed digest, also tail `~/.local/state/css/digest.log` (structured JSON, one event per line) — `event=digest_failed` carries the period and the CLI exit message.
+
 ## AI usage
 
 - **Ingest-time classifier (Anthropic API, Haiku 4.5).** `tool_use` with a forced schema. JSON per item: `{ relevance: 0–1, priority: routine|notable|breaking, one_line: string }`. Drop (delete the items row) if `relevance < 0.5`. Priority rubric biases toward 'routine' (default) — only true material events escalate to 'breaking'. Prompt includes an explicit security note instructing Haiku that the source/URL/title/snippet are untrusted third-party data and must not be followed as instructions, plus an isolation note so one item's text can't influence another's score in a batch. **Batched, not per-item:** `classifyItem` keeps a per-item signature but concurrent calls (pollers classify in concurrent chunks) are coalesced into one Haiku request, amortizing the ~1k-token system prompt across many items — the dominant cost. Failed/omitted items fall back to individual retries so a bad batch never loses classifications. No prompt caching: Haiku 4.5's cache floor is ~4096 tokens (empirically verified), well above this prompt, so `cache_control` would be a silent no-op — batching is the lever instead. ~$0.0001/item batched (was ~$0.0005 per-item).

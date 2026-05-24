@@ -531,14 +531,19 @@ async function invokeClaudeOnce(prompt: string): Promise<ClaudeResult> {
  * hiccup, and the json attempt plus its immediate text fallback hit the same
  * wall back-to-back (~27 min burned, the day's digest permanently dropped
  * until the next nightly catch-up). A spaced retry gives the limit time to
- * clear. Each failing CLI attempt already costs minutes, so the 30s→120s
- * back-off is effectively free relative to the work it guards.
+ * clear. Each failing CLI attempt already costs minutes, so the back-off is
+ * effectively free relative to the work it guards.
+ *
+ * The 2026-05-24 catch-up failure ran the original 30s/120s plan to
+ * exhaustion on all three missing periods — the dip was wider than the
+ * retry window. Bumped to 60s/300s/1500s (~30 min worst case per period)
+ * so the next wide dip is more likely to clear before we give up.
  */
 async function invokeClaude(prompt: string): Promise<ClaudeResult> {
   return withRetry("invokeClaude", () => invokeClaudeOnce(prompt), {
     attempts: 3,
-    baseMs: 30_000,
-    factor: 4,
+    baseMs: 60_000,
+    factor: 5,
   });
 }
 
@@ -555,8 +560,19 @@ function runClaudeOnce(args: string[], prompt: string): Promise<string> {
     });
     child.on("error", rejectFn);
     child.on("close", (code) => {
-      if (code === 0) resolveFn(stdout);
-      else rejectFn(new Error(`claude exited ${code}: ${stderr.slice(0, 400)}`));
+      if (code === 0) {
+        resolveFn(stdout);
+        return;
+      }
+      // 2026-05-24: tightened the error message after a day of failures
+      // logged just `claude exited 1: ` with no other context. We now keep
+      // the full stderr (no slice) and, when it's empty, fall back to a
+      // stdout summary (length + tail) — the most likely place the CLI
+      // leaves a clue when it prints a partial result before crashing.
+      const diag = stderr.length
+        ? `stderr=${stderr}`
+        : `stderr empty; stdout_len=${stdout.length} stdout_tail=${JSON.stringify(stdout.slice(-200))}`;
+      rejectFn(new Error(`claude exited ${code}: ${diag}`));
     });
     child.stdin.write(prompt);
     child.stdin.end();

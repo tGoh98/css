@@ -91,19 +91,33 @@ function log(fields: Record<string, unknown>): void {
 }
 
 /**
+ * Drizzle wraps the driver error so `err.message` is just the SQL text; the
+ * real reason (ECONNREFUSED, connect timeout, Neon wake) lives in `err.cause`.
+ * Surface it so the logs explain *why* a query failed, not just which one.
+ */
+function causeOf(err: unknown): string | undefined {
+  const cause = (err as { cause?: unknown })?.cause;
+  if (cause == null) return undefined;
+  return cause instanceof Error ? cause.message : String(cause);
+}
+
+/**
  * Retry a thenable with exponential backoff. Used to absorb the rare
  * Neon-connect / transient Postgres flake — the failure mode that took out
  * the 2026-05-14 09:02 PDT run, where all 14 ranges errored within 600 ms
  * because the first connection attempt failed and there was no retry.
  *
- * Defaults: 3 attempts at 500 ms → 2 s → 8 s back-off (10.5 s total ceiling).
+ * Defaults: 4 attempts at 500 ms → 2 s → 8 s back-off (10.5 s total ceiling).
+ * NOTE: the loop skips the sleep on the final attempt, so reaching the full
+ * 8 s back-off needs 4 attempts, not 3 — the 2026-06-03 run gave up after
+ * only ~2.5 s (the old default of 3) and lost two ranges to a Neon cold start.
  */
 async function withRetry<T>(
   label: string,
   fn: () => Promise<T>,
   opts: { attempts?: number; baseMs?: number; factor?: number } = {},
 ): Promise<T> {
-  const attempts = opts.attempts ?? 3;
+  const attempts = opts.attempts ?? 4;
   const baseMs = opts.baseMs ?? 500;
   const factor = opts.factor ?? 4;
   let lastErr: unknown;
@@ -121,11 +135,26 @@ async function withRetry<T>(
         attempt: i + 1,
         delayMs: delay,
         err: err instanceof Error ? err.message : String(err),
+        cause: causeOf(err),
       });
       await new Promise((r) => setTimeout(r, delay));
     }
   }
   throw lastErr;
+}
+
+/**
+ * Wake the Neon compute once, before the range loop, so the scale-to-zero
+ * cold start (~9–10 s) is paid a single time instead of being charged against
+ * the first one or two ranges' retry budgets (which is how 2026-06-03 lost the
+ * June 2 daily). Generous budget: 6 attempts → up to ~40 s, well past a wake.
+ */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+async function warmUpDb(db: any): Promise<void> {
+  const { sql } = await import("drizzle-orm");
+  const t0 = Date.now();
+  await withRetry("warmUp", () => db.execute(sql`select 1`), { attempts: 6 });
+  log({ level: "info", event: "db_warm", elapsedMs: Date.now() - t0 });
 }
 
 // ---------------------------------------------------------------------------
@@ -772,6 +801,7 @@ async function generateOne(
       period,
       periodStart: startStr,
       err: message,
+      cause: causeOf(err),
       stack: err instanceof Error ? err.stack : undefined,
     });
     return { kind: "failed", err: message };
@@ -787,6 +817,22 @@ async function main(): Promise<void> {
   }
 
   const { db, schema } = await loadDb();
+
+  // Pay the Neon cold start once, up front. Without this the first range's
+  // ~10.5 s retry budget gets spent waking the compute and the range is lost
+  // (the 2026-06-03 09:06 PDT run dropped the June 2 daily this way).
+  try {
+    await warmUpDb(db);
+  } catch (err) {
+    log({
+      level: "error",
+      event: "db_warm_failed",
+      err: err instanceof Error ? err.message : String(err),
+      cause: causeOf(err),
+    });
+    process.exit(1);
+  }
+
   const now = new Date();
 
   let ranges: PeriodRange[];

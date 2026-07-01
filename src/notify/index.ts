@@ -383,14 +383,24 @@ export async function notifyDigestFailure(args: {
     const resend = resendClient();
     const skipped = args.skipExists + args.skipNoItems;
 
+    // A logged-out local Claude Code CLI is the highest-signal, most actionable
+    // failure — no amount of re-running --catch-up helps until the Mac is
+    // re-authenticated. Detect the CLI's logged-out signature so the alert can
+    // lead with the fix. (Mirrors isAuthError() in scripts/run-digest.ts.)
+    const loggedOut = args.sampleError
+      ? /not logged in|please run \/login/i.test(args.sampleError)
+      : false;
+
     // Most "X/14 ranges errored" alerts are a single missing day buried in a
     // catch-up sweep where the rest already existed. The subject + body lead
     // with the real scope (how many digests are actually missing and which
     // dates) so the alert isn't mistaken for a full outage. Targeted re-run
     // commands name the failed dates — far cheaper than re-sweeping --catch-up.
-    const subject =
-      `[CSS Digest] ${args.period} worker — ${args.failedRanges} range(s) failed, ` +
-      `${args.written} written, ${skipped} skipped`;
+    const subject = loggedOut
+      ? `[CSS Digest] ${args.period} worker LOGGED OUT — run /login on the Mac ` +
+        `(${args.failedRanges} range(s) missing)`
+      : `[CSS Digest] ${args.period} worker — ${args.failedRanges} range(s) failed, ` +
+        `${args.written} written, ${skipped} skipped`;
 
     const failedList =
       args.failedPeriods.length > 0 ? args.failedPeriods.join(", ") : "(dates not reported)";
@@ -405,7 +415,16 @@ export async function notifyDigestFailure(args: {
             .join("\n")
         : `  npm exec tsx -- scripts/run-digest.ts --period ${args.period} --catch-up`;
 
+    const loginText = loggedOut
+      ? 'The local Claude Code CLI is LOGGED OUT — `claude --print` returned ' +
+        '"Not logged in · Please run /login", and retries were skipped because ' +
+        "a logout won't clear itself.\n\n" +
+        "FIX: on the Mac, run `claude` and use /login to re-authenticate, then " +
+        "re-run the failed range(s) below.\n\n"
+      : "";
+
     const text =
+      loginText +
       `The ${args.period} digest worker completed but produced no new digests.\n\n` +
       `Scope (not a full outage — only the failed range(s) below are missing a digest):\n` +
       `  • ${args.written} written\n` +
@@ -432,6 +451,15 @@ export async function notifyDigestFailure(args: {
           <span style="display:inline-block; padding:2px 8px; border-radius:4px; background:#fee2e2; color:#991b1b; font-size:11px; font-weight:600; text-transform:uppercase; letter-spacing:0.05em;">Digest failure</span>
           <span style="margin-left:8px; padding:2px 8px; border-radius:4px; background:#eef2ff; color:#3730a3; font-size:11px; font-weight:600;">${escapeHtml(args.period)}</span>
         </p>
+        ${
+          loggedOut
+            ? `<div style="margin:0 0 12px; padding:10px 12px; background:#fef3c7; border:1px solid #f59e0b; border-radius:6px; color:#92400e; font-size:13px; line-height:1.5;">
+                 <strong>The local Claude Code CLI is logged out.</strong>
+                 <code>claude --print</code> returned “Not logged in · Please run /login”, and retries were skipped because a logout won't clear itself.<br/>
+                 <strong>Fix:</strong> on the Mac, run <code>claude</code> and use <code>/login</code> to re-authenticate, then re-run the failed range(s) below.
+               </div>`
+            : ""
+        }
         <p style="margin: 0 0 8px;">
           The ${escapeHtml(args.period)} digest worker completed but produced no new digests.
           <strong>This is not a full outage</strong> — only the failed range(s) below are missing a digest.

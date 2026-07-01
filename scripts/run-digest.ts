@@ -115,7 +115,14 @@ function causeOf(err: unknown): string | undefined {
 async function withRetry<T>(
   label: string,
   fn: () => Promise<T>,
-  opts: { attempts?: number; baseMs?: number; factor?: number } = {},
+  opts: {
+    attempts?: number;
+    baseMs?: number;
+    factor?: number;
+    // Return false to give up immediately on an error the back-off can't fix
+    // (e.g. a logged-out CLI — see invokeClaude). Retryable by default.
+    shouldRetry?: (err: unknown) => boolean;
+  } = {},
 ): Promise<T> {
   const attempts = opts.attempts ?? 4;
   const baseMs = opts.baseMs ?? 500;
@@ -127,6 +134,17 @@ async function withRetry<T>(
     } catch (err) {
       lastErr = err;
       if (i === attempts - 1) break;
+      if (opts.shouldRetry && !opts.shouldRetry(err)) {
+        log({
+          level: "warn",
+          event: "retry_abort",
+          label,
+          attempt: i + 1,
+          err: err instanceof Error ? err.message : String(err),
+          cause: causeOf(err),
+        });
+        break;
+      }
       const delay = baseMs * Math.pow(factor, i);
       log({
         level: "warn",
@@ -533,6 +551,19 @@ interface ClaudeResult {
   modelLabel: string;
 }
 
+/**
+ * A logged-out CLI (`claude --print` → "Not logged in · Please run /login") is
+ * a permanent failure for the run, not a transient hiccup — no amount of
+ * back-off re-authenticates it. Both the 2026-07-01 daily and monthly digests
+ * were lost this way, each burning ~30 min of retry budget on a wall that
+ * never moves. Detect the signature so callers fail fast and the alert can say
+ * "run /login". (notifyDigestFailure mirrors this regex for its email copy.)
+ */
+function isAuthError(err: unknown): boolean {
+  const msg = err instanceof Error ? err.message : String(err);
+  return /not logged in|please run \/login/i.test(msg);
+}
+
 async function invokeClaudeOnce(prompt: string): Promise<ClaudeResult> {
   // We try JSON output first; if the CLI version doesn't support it we fall
   // back to plain text. The current Claude Code CLI (verified via `claude
@@ -545,6 +576,9 @@ async function invokeClaudeOnce(prompt: string): Promise<ClaudeResult> {
       modelLabel: `${CLAUDE_MODEL} (via Claude Code)`,
     };
   } catch (err) {
+    // A logged-out CLI fails the text path identically — skip the second
+    // invocation and propagate so invokeClaude's shouldRetry aborts the run.
+    if (isAuthError(err)) throw err;
     log({ level: "warn", event: "claude_json_failed", err: String(err) });
     const text = await runClaudeText(prompt);
     return {
@@ -573,6 +607,9 @@ async function invokeClaude(prompt: string): Promise<ClaudeResult> {
     attempts: 3,
     baseMs: 60_000,
     factor: 5,
+    // A logged-out CLI won't recover mid-run — fail fast instead of burning
+    // ~30 min (60s/300s/1500s) of back-off, and let the alert surface it.
+    shouldRetry: (err) => !isAuthError(err),
   });
 }
 

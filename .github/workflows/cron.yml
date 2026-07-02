@@ -50,7 +50,14 @@ jobs:
           fi
           URL="https://css-lake-three.vercel.app/api/cron/${{ matrix.endpoint }}"
           echo "Hitting $URL"
-          RESPONSE=$(curl -fsS --max-time 90 \
+          # --retry-all-errors + --retry-connrefused so a transient TLS/connection
+          # blip to Vercel (curl exit 35 SSL_ERROR_SYSCALL, connection reset, etc.)
+          # retries instead of failing the whole workflow and firing a false-alarm
+          # email. Plain --retry does NOT cover a connect-phase SSL error, hence the
+          # sledgehammer. The ingest pollers are idempotent (watermark + SHA dedup),
+          # so a retry is safe even if an earlier attempt reached the server.
+          RESPONSE=$(curl -fsS --max-time 90 --connect-timeout 15 \
+            --retry 3 --retry-delay 2 --retry-connrefused --retry-all-errors \
             -H "Authorization: Bearer $CRON_SECRET" \
             "$URL")
           echo "$RESPONSE"
@@ -87,7 +94,14 @@ jobs:
           fi
           URL="https://css-lake-three.vercel.app/api/cron/${{ matrix.endpoint }}"
           echo "Hitting $URL"
-          RESPONSE=$(curl -fsS --max-time 90 \
+          # --retry-all-errors + --retry-connrefused so a transient TLS/connection
+          # blip to Vercel (curl exit 35 SSL_ERROR_SYSCALL, connection reset, etc.)
+          # retries instead of failing the whole workflow and firing a false-alarm
+          # email. Plain --retry does NOT cover a connect-phase SSL error, hence the
+          # sledgehammer. The ingest pollers are idempotent (watermark + SHA dedup),
+          # so a retry is safe even if an earlier attempt reached the server.
+          RESPONSE=$(curl -fsS --max-time 90 --connect-timeout 15 \
+            --retry 3 --retry-delay 2 --retry-connrefused --retry-all-errors \
             -H "Authorization: Bearer $CRON_SECRET" \
             "$URL")
           echo "$RESPONSE"

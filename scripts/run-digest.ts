@@ -552,16 +552,26 @@ interface ClaudeResult {
 }
 
 /**
- * A logged-out CLI (`claude --print` → "Not logged in · Please run /login") is
- * a permanent failure for the run, not a transient hiccup — no amount of
- * back-off re-authenticates it. Both the 2026-07-01 daily and monthly digests
- * were lost this way, each burning ~30 min of retry budget on a wall that
- * never moves. Detect the signature so callers fail fast and the alert can say
- * "run /login". (notifyDigestFailure mirrors this regex for its email copy.)
+ * A logged-out CLI is a permanent failure for the run, not a transient
+ * hiccup — no amount of back-off re-authenticates it. Both the 2026-07-01
+ * daily and monthly digests were lost this way, each burning ~30 min of retry
+ * budget on a wall that never moves. Detect the signature so callers fail fast
+ * and the alert can say "run /login". (notifyDigestFailure mirrors this regex
+ * for its email copy.)
+ *
+ * The CLI phrases logout two ways depending on version/state:
+ *   - older / never-logged-in: "Not logged in · Please run /login"
+ *   - v2.x expired token:      "Failed to authenticate: OAuth session expired
+ *                               and could not be refreshed"
+ * The 2026-07-10→11 outage was the second phrasing: the old regex missed it,
+ * so fail-fast never fired and each nightly run burned ~2h retrying an
+ * unrecoverable auth wall before the alert surfaced. Match both.
  */
 function isAuthError(err: unknown): boolean {
   const msg = err instanceof Error ? err.message : String(err);
-  return /not logged in|please run \/login/i.test(msg);
+  return /not logged in|please run \/login|failed to authenticate|oauth session expired|could not be refreshed/i.test(
+    msg,
+  );
 }
 
 async function invokeClaudeOnce(prompt: string): Promise<ClaudeResult> {

@@ -17,6 +17,11 @@ See `docs/ARCHITECTURE.md` → "AI usage" and "Scheduling" for the why.
   - Verify with `claude --version` and `claude --print "hi"`.
   - Authentication: run `claude` once interactively to complete sign-in if
     you haven't already.
+  - **For the unattended launchd jobs, prefer a long-lived token** over the
+    interactive sign-in — see [§2a](#2a-keeping-auth-alive-recommended). The
+    Keychain OAuth session refreshes only on-demand and its refresh token
+    expires every few weeks, which is what makes the digest jobs fail with
+    `OAuth session expired and could not be refreshed`.
 - **Node 22+**.
 - **tsx** (already a devDependency of this repo). Confirm with:
   ```
@@ -47,9 +52,15 @@ APP_URL=https://css-lake-three.vercel.app
 DIGEST_WEBHOOK_SECRET=<paste-the-same-value-set-in-Vercel>
 RESEND_API_KEY=<paste-the-same-value-set-in-Vercel>
 RESEND_TO_EMAIL=<recipient-email>
+CLAUDE_CODE_OAUTH_TOKEN=<paste-output-of `claude setup-token`; see §2a>
 EOF
 chmod 600 ~/.config/css/digest.env
 ```
+
+> ⚠️ Never put `ANTHROPIC_API_KEY` in this file. `run-digest.ts` loads
+> `digest.env` into the environment and the `claude --print` child inherits it;
+> a present `ANTHROPIC_API_KEY` would take auth precedence and silently switch
+> digest generation to **metered API billing** instead of $0 Max-plan capacity.
 
 Required keys:
 
@@ -66,6 +77,7 @@ Optional:
 | Key | Default | Purpose |
 |---|---|---|
 | `CLAUDE_BIN` | `claude` | Override the Claude Code CLI binary path if it's not on the launchd `$PATH`. |
+| `CLAUDE_CODE_OAUTH_TOKEN` | _(unset → Keychain OAuth)_ | Long-lived (1-year) subscription token from `claude setup-token`. When set, `claude` uses it instead of the expiring Keychain OAuth session — the recommended auth for the launchd jobs. Stays on $0 Max-plan capacity. See [§2a](#2a-keeping-auth-alive-recommended). |
 | `RESEND_FROM_EMAIL` | `onboarding@resend.dev` | Override the From: address. |
 
 If `APP_URL` or `DIGEST_WEBHOOK_SECRET` is missing, the worker still writes
@@ -83,6 +95,56 @@ The Vercel keys themselves are sourced from:
 - All three (`DIGEST_WEBHOOK_SECRET`, `RESEND_API_KEY`, `RESEND_TO_EMAIL`)
   must be set in Vercel production env first; they're shared between the
   Vercel functions and the local worker.
+
+---
+
+## 2a. Keeping auth alive (recommended)
+
+**Symptom:** a digest run fails with
+`Failed to authenticate: OAuth session expired and could not be refreshed`
+(logged as `digest_failed` + a `[CSS Digest] … worker failed` email).
+
+**Why it happens:** the interactive sign-in stores an OAuth session in the
+macOS Keychain (`security find-generic-password -s "Claude Code-credentials"`).
+That session's access token is short-lived and is only refreshed *on demand*
+when you run `claude`; the underlying refresh token itself expires after a few
+weeks. Running under `launchd` (a non-interactive context) makes a stale/failed
+refresh more likely, and there is **no** background refresh and **no**
+non-interactive re-login — recovering the Keychain session requires a human to
+run `claude` / `claude auth login` in a terminal.
+
+**Fix — use a long-lived token instead of the Keychain session:**
+
+```bash
+# 1. Mint a 1-year subscription token (opens a browser; prints the token ONCE).
+#    Run this in your OWN terminal, not through an agent — the output is a secret.
+claude setup-token
+
+# 2. Paste it into the worker env file (outside the repo, mode 600). Do NOT
+#    commit it and do NOT paste it into chat/transcripts.
+#    Append the line:  CLAUDE_CODE_OAUTH_TOKEN=sk-ant-oat01-...
+$EDITOR ~/.config/css/digest.env
+```
+
+That's the whole change — **no code edits.** `run-digest.ts` loads
+`digest.env` into its environment and the `claude --print` child inherits it;
+`CLAUDE_CODE_OAUTH_TOKEN` takes auth precedence over the Keychain session, so
+the jobs stop depending on the expiring interactive login. Usage still bills to
+your Max-plan capacity ($0), exactly like the interactive session — it is **not**
+metered API billing.
+
+**Verify it took:**
+
+```bash
+# Should print "ok" using the token (temporarily export it in your shell):
+CLAUDE_CODE_OAUTH_TOKEN=$(sed -n 's/^CLAUDE_CODE_OAUTH_TOKEN=//p' ~/.config/css/digest.env) \
+  claude --print "reply with the single word: ok"
+```
+
+**Maintenance:** the token lasts ~1 year. Set a reminder to re-run
+`claude setup-token` before it lapses; when it does expire you'll get the same
+failure email, and the `--catch-up` flag means a manual re-run after refreshing
+recovers any missed digests.
 
 ---
 

@@ -388,7 +388,9 @@ export async function notifyDigestFailure(args: {
     // re-authenticated. Detect the CLI's logged-out signature so the alert can
     // lead with the fix. (Mirrors isAuthError() in scripts/run-digest.ts.)
     const loggedOut = args.sampleError
-      ? /not logged in|please run \/login/i.test(args.sampleError)
+      ? /not logged in|please run \/login|failed to authenticate|oauth session expired|could not be refreshed/i.test(
+          args.sampleError,
+        )
       : false;
 
     // Most "X/14 ranges errored" alerts are a single missing day buried in a
@@ -416,9 +418,10 @@ export async function notifyDigestFailure(args: {
         : `  npm exec tsx -- scripts/run-digest.ts --period ${args.period} --catch-up`;
 
     const loginText = loggedOut
-      ? 'The local Claude Code CLI is LOGGED OUT — `claude --print` returned ' +
-        '"Not logged in · Please run /login", and retries were skipped because ' +
-        "a logout won't clear itself.\n\n" +
+      ? "The local Claude Code CLI is LOGGED OUT — `claude --print` failed to " +
+        "authenticate (logged out, or the OAuth session expired and could not " +
+        "be refreshed), and retries were skipped because a logout won't clear " +
+        "itself.\n\n" +
         "FIX: on the Mac, run `claude` and use /login to re-authenticate, then " +
         "re-run the failed range(s) below.\n\n"
       : "";
@@ -455,7 +458,7 @@ export async function notifyDigestFailure(args: {
           loggedOut
             ? `<div style="margin:0 0 12px; padding:10px 12px; background:#fef3c7; border:1px solid #f59e0b; border-radius:6px; color:#92400e; font-size:13px; line-height:1.5;">
                  <strong>The local Claude Code CLI is logged out.</strong>
-                 <code>claude --print</code> returned “Not logged in · Please run /login”, and retries were skipped because a logout won't clear itself.<br/>
+                 <code>claude --print</code> failed to authenticate (logged out, or the OAuth session expired and could not be refreshed), and retries were skipped because a logout won't clear itself.<br/>
                  <strong>Fix:</strong> on the Mac, run <code>claude</code> and use <code>/login</code> to re-authenticate, then re-run the failed range(s) below.
                </div>`
             : ""

@@ -12,6 +12,12 @@
          launchctl load ~/Library/LaunchAgents/com.css.digest-daily.plist
 
   See LOCAL_SETUP.md for the full walkthrough.
+
+  NOTE: do NOT append `>> digest.log 2>&1` to the command below. run-digest.ts
+  already writes every event to ~/.local/state/css/digest.log itself; adding a
+  shell redirect makes stdout land in that same file and every line is written
+  twice (fixed 2026-08-06). StandardOutPath/StandardErrorPath below capture
+  stdout separately, which is where crashes that bypass the logger show up.
 -->
 <plist version="1.0">
 <dict>
@@ -22,7 +28,7 @@
   <array>
     <string>/bin/bash</string>
     <string>-c</string>
-    <string>cd /Users/tgoh/playground/css &amp;&amp; TSX_PATH scripts/run-digest.ts --period day --catch-up &gt;&gt; HOME_PATH/.local/state/css/digest.log 2&gt;&amp;1</string>
+    <string>cd /Users/tgoh/playground/css &amp;&amp; TSX_PATH scripts/run-digest.ts --period day --catch-up</string>
   </array>
 
   <key>EnvironmentVariables</key>

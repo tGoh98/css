@@ -2,8 +2,8 @@
  * Local digest worker — runs on the owner's Mac via launchd.
  *
  * Pulls items for the requested period from Neon, builds a prompt, invokes
- * `claude --print` (Sonnet 4.6 via Max plan), parses Markdown output, and
- * writes a row into the `digests` table.
+ * `claude --print` (Opus via Max plan — see CLAUDE_MODEL for why), parses
+ * Markdown output, and writes a row into the `digests` table.
  *
  * Usage:
  *   tsx scripts/run-digest.ts --period day   --date 2026-05-12
@@ -78,10 +78,18 @@ try {
   // ignore — logging failures must not crash the worker.
 }
 
+/**
+ * Writes one line to digest.log and one to stdout — which must land in
+ * *different* files. The launchd plists therefore must NOT redirect stdout
+ * into digest.log: doing so gives every event two byte-identical entries in
+ * the same file (which is what happened until 2026-08-06 — ~450 KB of the
+ * 904 KB log was duplicate, and any `grep -c` over it read 2x high).
+ * stdout goes to the plists' StandardOutPath, which is the right place for
+ * crashes that bypass this function (tsx resolution errors, stack traces).
+ */
 function log(fields: Record<string, unknown>): void {
   const ts = new Date().toISOString();
   const payload = JSON.stringify({ ts, ...fields });
-  // Also surface to stdout so launchd's StandardOutPath captures it.
   console.log(payload);
   try {
     appendFileSync(LOG_FILE, payload + "\n");
@@ -165,14 +173,45 @@ async function withRetry<T>(
  * Wake the Neon compute once, before the range loop, so the scale-to-zero
  * cold start (~9–10 s) is paid a single time instead of being charged against
  * the first one or two ranges' retry budgets (which is how 2026-06-03 lost the
- * June 2 daily). Generous budget: 6 attempts → up to ~40 s, well past a wake.
+ * June 2 daily).
+ *
+ * Hard-capped at WARM_UP_BUDGET_MS. The original version claimed a "~40 s"
+ * budget but actually allowed 6 attempts at base 500 ms × factor 4 — that is
+ * 170 s of *sleep* alone, and each attempt can additionally hang on the
+ * driver's connect timeout. The 2026-08-06 run spent 606 s here before doing
+ * any work. The retry params below sum to ~20 s of back-off; the deadline
+ * bounds the pathological case where individual attempts hang.
  */
+const WARM_UP_BUDGET_MS = 60_000;
+
+// The daily/weekly/monthly agents all append to the same digest.log and all
+// fire together on RunAtLoad, so tag warm-up events with the period — two
+// concurrent runs otherwise emit byte-identical lines that read as a dupe.
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-async function warmUpDb(db: any): Promise<void> {
+async function warmUpDb(db: any, period: Period): Promise<void> {
   const { sql } = await import("drizzle-orm");
   const t0 = Date.now();
-  await withRetry("warmUp", () => db.execute(sql`select 1`), { attempts: 6 });
-  log({ level: "info", event: "db_warm", elapsedMs: Date.now() - t0 });
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const deadline = new Promise<never>((_, reject) => {
+    timer = setTimeout(
+      () => reject(new Error(`warm-up exceeded ${WARM_UP_BUDGET_MS} ms budget`)),
+      WARM_UP_BUDGET_MS,
+    );
+  });
+  // 5 attempts at 500 ms × 3 → 500 + 1500 + 4500 + 13500 ≈ 20 s of back-off.
+  const warm = withRetry("warmUp", () => db.execute(sql`select 1`), {
+    attempts: 5,
+    factor: 3,
+  });
+  // If the deadline wins the race, `warm` may still reject later with nobody
+  // listening — attach a sink so that can't become an unhandled rejection.
+  warm.catch(() => {});
+  try {
+    await Promise.race([warm, deadline]);
+    log({ level: "info", event: "db_warm", period, elapsedMs: Date.now() - t0 });
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -574,7 +613,10 @@ function isAuthError(err: unknown): boolean {
   );
 }
 
-async function invokeClaudeOnce(prompt: string): Promise<ClaudeResult> {
+async function invokeClaudeOnce(
+  prompt: string,
+  opts: { allowTextFallback: boolean },
+): Promise<ClaudeResult> {
   // We try JSON output first; if the CLI version doesn't support it we fall
   // back to plain text. The current Claude Code CLI (verified via `claude
   // --help`) supports --print, --output-format json, and --model, so the JSON
@@ -589,7 +631,19 @@ async function invokeClaudeOnce(prompt: string): Promise<ClaudeResult> {
     // A logged-out CLI fails the text path identically — skip the second
     // invocation and propagate so invokeClaude's shouldRetry aborts the run.
     if (isAuthError(err)) throw err;
-    log({ level: "warn", event: "claude_json_failed", err: String(err) });
+    // Transient JSON failures ("API Error: Connection closed mid-response",
+    // which is a *streaming* blip, not a capability gap) used to drop straight
+    // into the text path. That burned a second full invocation immediately and
+    // silently downgraded the run: every digest from 2026-08-05 onward was
+    // recorded as "text fallback" even though a retried JSON call would have
+    // succeeded. Re-throw so withRetry backs off and retries JSON; only the
+    // last attempt is allowed to degrade, so a genuinely JSON-less CLI still
+    // produces a digest rather than nothing.
+    if (!opts.allowTextFallback) {
+      log({ level: "warn", event: "claude_json_failed", willRetryJson: true, err: String(err) });
+      throw err;
+    }
+    log({ level: "warn", event: "claude_json_failed", willRetryJson: false, err: String(err) });
     const text = await runClaudeText(prompt);
     return {
       text,
@@ -613,14 +667,24 @@ async function invokeClaudeOnce(prompt: string): Promise<ClaudeResult> {
  * so the next wide dip is more likely to clear before we give up.
  */
 async function invokeClaude(prompt: string): Promise<ClaudeResult> {
-  return withRetry("invokeClaude", () => invokeClaudeOnce(prompt), {
-    attempts: 3,
-    baseMs: 60_000,
-    factor: 5,
-    // A logged-out CLI won't recover mid-run — fail fast instead of burning
-    // ~30 min (60s/300s/1500s) of back-off, and let the alert surface it.
-    shouldRetry: (err) => !isAuthError(err),
-  });
+  const attempts = 3;
+  let attempt = 0;
+  return withRetry(
+    "invokeClaude",
+    () => {
+      attempt += 1;
+      // Degrade to the text path only once the JSON retries are exhausted.
+      return invokeClaudeOnce(prompt, { allowTextFallback: attempt >= attempts });
+    },
+    {
+      attempts,
+      baseMs: 60_000,
+      factor: 5,
+      // A logged-out CLI won't recover mid-run — fail fast instead of burning
+      // ~30 min (60s/300s/1500s) of back-off, and let the alert surface it.
+      shouldRetry: (err) => !isAuthError(err),
+    },
+  );
 }
 
 function runClaudeOnce(args: string[], prompt: string): Promise<string> {
@@ -868,16 +932,21 @@ async function main(): Promise<void> {
   // Pay the Neon cold start once, up front. Without this the first range's
   // ~10.5 s retry budget gets spent waking the compute and the range is lost
   // (the 2026-06-03 09:06 PDT run dropped the June 2 daily this way).
+  // A failed warm-up is not fatal: it is an optimisation, and every query
+  // below carries its own retry budget. Exiting here (the previous behaviour)
+  // threw away the whole run over a slow wake that the range loop would have
+  // absorbed on its own.
   try {
-    await warmUpDb(db);
+    await warmUpDb(db, args.period);
   } catch (err) {
     log({
-      level: "error",
+      level: "warn",
       event: "db_warm_failed",
+      period: args.period,
+      note: "continuing — per-range retries will absorb the cold start",
       err: err instanceof Error ? err.message : String(err),
       cause: causeOf(err),
     });
-    process.exit(1);
   }
 
   const now = new Date();

@@ -28,7 +28,9 @@ async function main() {
   console.log("\n=== items ingested per kind (last 24h) ===");
   console.table(ingest);
 
-  // Per-source recency (any source with no items in 48h is suspect)
+  // Per-source recency (any source with no items in 48h is suspect).
+  // Disabled sources are excluded — a deliberately-retired source is not a
+  // health signal, and leaving them in trains you to ignore the list.
   const stale = await db.execute(sql`
     SELECT
       s.kind, s.name,
@@ -36,12 +38,42 @@ async function main() {
       (now() - MAX(i.fetched_at))::text AS gap
     FROM sources s
     LEFT JOIN items i ON i.source_id = s.id
+    WHERE s.enabled
     GROUP BY s.kind, s.name
     ORDER BY MAX(i.fetched_at) NULLS FIRST
     LIMIT 30;
   `);
-  console.log("\n=== sources by oldest last item ===");
+  console.log("\n=== sources by oldest last item (enabled only) ===");
   console.table(stale);
+
+  // Enabled sources that have NEVER produced an item. These are a different
+  // failure class from "stale": a stale source worked once and stopped, so the
+  // gap column eventually screams. A never-succeeded source has no gap to
+  // measure and hides at the top of the list forever behind a null — which is
+  // how `Sketch blog` and `Penpot blog` sat broken from creation until
+  // 2026-08-06 (both seeded with URLs that 404'd, both config-flagged
+  // "URL unverified — may 404", neither ever escalated).
+  const neverIngested = await db.execute(sql`
+    SELECT
+      s.id, s.kind, s.name,
+      s.last_polled_at::text AS last_polled_at,
+      s.config_json->>'feedUrl' AS feed_url
+    FROM sources s
+    LEFT JOIN items i ON i.source_id = s.id
+    WHERE s.enabled
+    GROUP BY s.id, s.kind, s.name, s.last_polled_at, s.config_json
+    HAVING COUNT(i.id) = 0
+    ORDER BY s.id;
+  `);
+  console.log("\n=== NEVER ingested (enabled sources with zero items) ===");
+  if ((neverIngested as unknown as unknown[]).length === 0) {
+    console.log("(none — every enabled source has produced at least one item)");
+  } else {
+    console.table(neverIngested);
+    console.log(
+      "^ These have produced nothing since creation. Check the feed URL actually resolves.",
+    );
+  }
 
   // Unclassified backlog
   const backlog = await db.execute(sql`

@@ -54,11 +54,10 @@ const FEEDS: FeedDef[] = [
     kind: "competitor-blog",
     url: "https://www.sketch.com/blog/feed.xml",
   },
-  {
-    name: "Penpot blog",
-    kind: "competitor-blog",
-    url: "https://penpot.app/blog/rss.xml",
-  },
+  // Penpot blog is intentionally absent: penpot.app publishes no RSS/Atom feed
+  // (every candidate URL 404s — verified 2026-08-06). The source row exists but
+  // is disabled; Penpot product news comes from "Penpot GitHub releases".
+  // See scripts/fix-competitor-feeds.ts.
 ];
 
 async function backfillFeed(def: FeedDef, parser: Parser, limit: number): Promise<{ scanned: number; kept: number }> {

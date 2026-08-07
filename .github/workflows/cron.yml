@@ -9,17 +9,17 @@ name: Cron
 
 on:
   schedule:
-    - cron: '*/5 * * * *'    # high-freq tick: news + reddit + hn
-    - cron: '0 * * * *'      # hourly tick: figma-blog + sec + competitors + chart + cluster
+    - cron: '*/5 * * * *'    # fast tier: news + reddit + hn
+    - cron: '0 * * * *'      # slow tier: figma-blog + sec + competitors + chart + cluster
   workflow_dispatch:
     inputs:
       tick:
         description: 'Tick to run (manual override)'
         type: choice
         options:
-          - '15m'
-          - 'hourly'
-        default: '15m'
+          - 'fast'
+          - 'slow'
+        default: 'fast'
 
 permissions: {}
 
@@ -28,12 +28,17 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  poke-15m:
+  poke-fast:
     if: |
       (github.event_name == 'schedule' && github.event.schedule == '*/5 * * * *') ||
-      (github.event_name == 'workflow_dispatch' && inputs.tick == '15m')
+      (github.event_name == 'workflow_dispatch' && inputs.tick == 'fast')
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    # 8 min, not 5: the curl budget below is ~186 s worst case, and the job
+    # needs headroom above it. At timeout-minutes: 5 the old curl budget
+    # (4 attempts x --max-time 90 + delays = 366 s) could exceed the job
+    # timeout and be killed mid-retry, surfacing as a workflow *failure*
+    # rather than the transient blip it actually was.
+    timeout-minutes: 8
     strategy:
       fail-fast: false
       matrix:
@@ -56,8 +61,10 @@ jobs:
           # email. Plain --retry does NOT cover a connect-phase SSL error, hence the
           # sledgehammer. The ingest pollers are idempotent (watermark + SHA dedup),
           # so a retry is safe even if an earlier attempt reached the server.
-          RESPONSE=$(curl -fsS --max-time 90 --connect-timeout 15 \
-            --retry 3 --retry-delay 2 --retry-connrefused --retry-all-errors \
+          # Budget: 3 attempts x 60 s + 2 x 3 s delay = 186 s worst case, which
+          # must stay comfortably under this job's timeout-minutes (see above).
+          RESPONSE=$(curl -fsS --max-time 60 --connect-timeout 15 \
+            --retry 2 --retry-delay 3 --retry-connrefused --retry-all-errors \
             -H "Authorization: Bearer $CRON_SECRET" \
             "$URL")
           echo "$RESPONSE"
@@ -72,12 +79,17 @@ jobs:
             exit 1
           fi
 
-  poke-hourly:
+  poke-slow:
     if: |
       (github.event_name == 'schedule' && github.event.schedule == '0 * * * *') ||
-      (github.event_name == 'workflow_dispatch' && inputs.tick == 'hourly')
+      (github.event_name == 'workflow_dispatch' && inputs.tick == 'slow')
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    # 8 min, not 5: the curl budget below is ~186 s worst case, and the job
+    # needs headroom above it. At timeout-minutes: 5 the old curl budget
+    # (4 attempts x --max-time 90 + delays = 366 s) could exceed the job
+    # timeout and be killed mid-retry, surfacing as a workflow *failure*
+    # rather than the transient blip it actually was.
+    timeout-minutes: 8
     strategy:
       fail-fast: false
       matrix:
@@ -100,8 +112,10 @@ jobs:
           # email. Plain --retry does NOT cover a connect-phase SSL error, hence the
           # sledgehammer. The ingest pollers are idempotent (watermark + SHA dedup),
           # so a retry is safe even if an earlier attempt reached the server.
-          RESPONSE=$(curl -fsS --max-time 90 --connect-timeout 15 \
-            --retry 3 --retry-delay 2 --retry-connrefused --retry-all-errors \
+          # Budget: 3 attempts x 60 s + 2 x 3 s delay = 186 s worst case, which
+          # must stay comfortably under this job's timeout-minutes (see above).
+          RESPONSE=$(curl -fsS --max-time 60 --connect-timeout 15 \
+            --retry 2 --retry-delay 3 --retry-connrefused --retry-all-errors \
             -H "Authorization: Bearer $CRON_SECRET" \
             "$URL")
           echo "$RESPONSE"
